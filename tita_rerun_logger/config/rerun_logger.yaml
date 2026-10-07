@@ -1,0 +1,67 @@
+# tita_rerun_logger parameters. Topic names are relative, like config/tita/mpx.yaml of
+# rl_controller: the logger runs in the robot namespace (launch argument "namespace").
+# Absolute names (/link_states, robot SDK topics) are outside the namespace.
+/**:
+  tita_rerun_logger:
+    ros__parameters:
+      # Rerun
+      application_id: "tita_mpx"
+      recording_id: ""            # same id in another process to merge the streams
+      save_rrd: true              # offline logging to .rrd (default)
+      rrd_dir: ""                 # "" = src/tita_rerun_logger/rerun_log
+      open_viewer: false          # true = also stream live to a viewer
+      viewer_url: "rerun+http://127.0.0.1:9876/proxy"   # other PC: rerun+http://<IP>:9876/proxy
+
+      # Robot
+      model_name: "tita"          # Gazebo entity (prefix in /link_states); the launch sets it
+      base_link: "base_link"
+      wheel_links: ["left_leg_4", "right_leg_4"]   # left, right (same order as mpx/estimate)
+      wheel_radius: 0.0925
+      # Joint order of mpx/effort and torque_limit: read from rl_controller's controllers.yaml
+      controllers_yaml: ""        # "" = share/rl_controller/config/tita/controllers.yaml
+      controller_name: "tita_rl_controller"
+
+      topics:
+        # robot (sensors and robot SDK)
+        robot_description: robot_description
+        joint_states: joint_states
+        imu: imu_sensor_broadcaster/imu
+        chassis_odometry: /tita4267305/chassis/odometry   # robot only (as in mpx_node.yaml)
+        # ground truth (Gazebo only)
+        link_states: /link_states
+        # filter
+        filtered_state: filtered_state
+        # MPX and FSM
+        mpx_effort: mpx/effort
+        mpx_handoff: mpx/handoff
+        mpx_keys_locked: mpx/keys_locked
+        mpx_estimate_prefix: mpx/estimate   # com, com_vel, base_rpy, left_wheel, right_wheel
+        fsm_state: fsm_state
+        # commands
+        cmd_key: command/cmd_key
+        cmd_twist: command/cmd_twist
+        cmd_pose: command/cmd_pose
+
+      # Every numeric field of these topics goes to extra/<topic>/... (missing ones are skipped)
+      extra_topics: ["/performance_metrics",
+                     "/tita4267305/locomotion/motors_status",
+                     "/tita4267305/system/battery/left", "/tita4267305/system/battery/right"]
+
+      # Ground truth matching: /link_states has no stamp, it gets the latest joint_states stamp
+      max_gt_dt_s: 0.003          # max |t_estimate - t_gt| to compute an error
+      gt_buffer_s: 0.5            # raw /link_states kept to match late estimates
+
+      # Logging rates (Hz of message time, 0 = every message). The MPX estimate and
+      # effort are always logged in full (~100 Hz).
+      rates_hz:
+        joints: 100.0
+        gt: 50.0
+        filter: 50.0
+        imu: 50.0
+        odom: 50.0
+        extra: 20.0
+        scene: 15.0               # 3D view (robot meshes, CoM, wheels)
+      flush_period_s: 2.0         # scalars are sent to Rerun in batches (fewer, larger chunks)
+      poll_period_s: 0.02         # high-rate topics are read in batches at this period
+      trail_length: 600
+      log_meshes: true
