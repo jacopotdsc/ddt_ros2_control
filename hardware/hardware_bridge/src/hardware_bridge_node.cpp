@@ -21,17 +21,26 @@
 
 namespace tita_locomotion
 {
+bool HardwareBridge::sendZeroTorque()
+{
+  if (!robot_) {
+    return false;
+  }
+  std::vector<double> zero(mJoints.size(), 0.0);
+  const bool ok = robot_->set_target_joint_t(zero);
+  if (ok) {
+    RCLCPP_INFO(rclcpp::get_logger("hardware_bridge"), "Zero torque sent to all joints");
+  } else {
+    RCLCPP_ERROR(rclcpp::get_logger("hardware_bridge"), "Failed to send zero torque");
+  }
+  return ok;
+}
+
+
 HardwareBridge::HardwareBridge() {}
 HardwareBridge::~HardwareBridge()
 {
-  // if (direct_mode_) {
-  //   std::vector<double> cmd_torque;
-  //   cmd_torque.resize(mJoints.size(), 0);
-  //   if (!robot_->set_target_joint_t(cmd_torque)) {
-  //     RCLCPP_ERROR(
-  //       rclcpp::get_logger("hardware_bridge"), "Failed to set target joint torque on exit");
-  //   }
-  // }
+  sendZeroTorque();
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn HardwareBridge::on_init(
@@ -138,6 +147,7 @@ HardwareBridge::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 HardwareBridge::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
+  sendZeroTorque();
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 

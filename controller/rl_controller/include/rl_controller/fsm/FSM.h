@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "FSMState.h"
+#include "FSMState_MPC.h"
 #include "FSMState_JointPD.h"
 #include "FSMState_Passive.h"
 #include "FSMState_RL.h"
@@ -31,6 +32,7 @@
 struct FSMStateList
 {
   FSMState_Passive * passive;
+  FSMState_MPC * mpc;
   // FSMState_BalanceStand * balanceStand;
   FSMState_TransformUp * transformUp;
   FSMState_JointPD * jointPD;
@@ -40,6 +42,7 @@ struct FSMStateList
   void deletePtr()
   {
     delete passive;
+    delete mpc;
     // delete balanceStand;
     delete transformUp;
     delete jointPD;

@@ -23,6 +23,7 @@ pluginlib_export_plugin_description_file(controller_interface rl_controller_plug
 set(FSM_FILES
   src/fsm/FSM.cpp
   src/fsm/FSMState.cpp
+  src/fsm/FSMState_MPC.cpp
   src/fsm/FSMState_JointPD.cpp
   src/fsm/FSMState_Passive.cpp
   src/fsm/FSMState_TransformUp.cpp

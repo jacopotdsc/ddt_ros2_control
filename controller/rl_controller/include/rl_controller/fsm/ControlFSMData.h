@@ -14,12 +14,30 @@
 
 #ifndef RL_CONTROLLER__FSM__CONTROLFSMDATA_H_
 #define RL_CONTROLLER__FSM__CONTROLFSMDATA_H_
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+#include <cmath>
 
 #include "rl_controller/common/Math/MathUtilities.h"
 #include "rl_controller/common/Math/orientation_tools.h"
 #include "rl_controller/common/RobotParameters.h"
 #include "rl_controller/common/enumClass.h"
+// A new MPC request waits for valid torques without an elapsed-time deadline.
+// Leaving MPC for an RL policy waits until MPX reports that mode as handed off.
+struct MpcCommand
+{
+  std::mutex mutex;
+  std::vector<double> effort;
+  bool valid = false;
+  uint64_t seq = 0;              // incremented on every new MPX torque
+  std::condition_variable cv;    // notified on every new MPX torque
+  std::string handoff;
+};
+
 struct ControlFSMData
 {
   // EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -31,6 +49,7 @@ struct ControlFSMData
     rc_data = std::make_shared<RemoteControlData>();
   };
 
+  MpcCommand mpc_command;
   std::shared_ptr<RobotControlParameters> params;
   std::shared_ptr<LowlevelCmd> low_cmd;
   std::shared_ptr<LowlevelState> low_state;

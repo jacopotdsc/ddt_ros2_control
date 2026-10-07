@@ -23,6 +23,10 @@
   <depend>eigen3_cmake_module</depend>
   
   <depend>ros_utils</depend>
+  <depend>realtime_tools</depend>
+
+  <exec_depend>mpx</exec_depend>
+  <exec_depend>tita_state_estimator</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>

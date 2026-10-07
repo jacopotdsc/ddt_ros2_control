@@ -85,6 +85,7 @@ private:
   size_t leg_dof_{4};
 
 private:
+  bool sendZeroTorque();
   std::unique_ptr<tita_robot> robot_;
   rclcpp::Clock clock_{RCL_SYSTEM_TIME};
   bool pvt_ctrl_{true};

@@ -1,3 +1,4 @@
+#include "rl_controller/fsm/FSMState_MPC.h"
 // Copyright (c) 2023 Direct Drive Technology Co., Ltd. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -134,6 +135,9 @@ std::string FSMState_RL::checkTransition()
   this->_nextStateName = this->_stateName;
   auto desiredState = _data->rc_data->fsm_name_;
   // 将 switch 替换为 if-else 结构
+  if (desiredState == "mpc" && FSMState_MPC::ready(_data)) {
+    return "mpc";
+  }
   if (desiredState.find("rl_") == 0) {
     try {
       size_t number = std::stoi(desiredState.substr(3));

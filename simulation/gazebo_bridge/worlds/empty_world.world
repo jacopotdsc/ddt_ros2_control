@@ -1,10 +1,25 @@
 <?xml version="1.0" ?>
 <sdf version="1.6">
   <world name="default">
+    <gravity>0 0 -9.81</gravity>
     <physics type="ode">
       <max_step_size>0.002</max_step_size>
       <real_time_update_rate>500</real_time_update_rate>
+      <!-- MPX needs well-converged contact velocities (see mpx/README.md). -->
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>300</iters>
+        </solver>
+      </ode>
     </physics>
+    <!-- /model_states at the physics rate: MPX reads the base pose/twist from it. -->
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <ros>
+        <namespace>/</namespace>
+      </ros>
+      <update_rate>500</update_rate>
+    </plugin>
     <include>
       <uri>model://sun</uri>
     </include>

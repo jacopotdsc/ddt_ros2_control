@@ -1,3 +1,4 @@
+#include "rl_controller/fsm/FSMState_MPC.h"
 // Copyright (c) 2023 Direct Drive Technology Co., Ltd. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -226,6 +227,9 @@ std::string FSMState_TransformUp::checkTransition()
   this->_nextStateName = this->_stateName;
   iter++;
   auto desiredState = _data->rc_data->fsm_name_;
+  if (desiredState == "mpc" && FSMState_MPC::ready(_data) && (int)(_state_iter - fold_ramp_iter - standup_ramp_iter) >= 100) {
+    return "mpc";
+  }
   if (desiredState == "transform_up") {
     // 无操作
     // } else if (desiredState == "idle") {  // normal c

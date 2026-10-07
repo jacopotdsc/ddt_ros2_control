@@ -24,12 +24,13 @@
 #include "fsm/FSM.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "rclcpp_lifecycle/state.hpp"
-#include "rl_controller_parameters.hpp"
+#include "rl_controller/rl_controller_parameters.hpp"
 #include "ros_utils/topic_names.hpp"
 #include "semantic_components/imu_sensor.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -90,6 +91,8 @@ protected:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr posestamped_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fsm_goal_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr mpc_subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mpc_handoff_subscription_;
   sensor_msgs::msg::Joy::SharedPtr joy_msg_ = nullptr;
 
 protected:

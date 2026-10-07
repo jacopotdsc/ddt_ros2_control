@@ -20,6 +20,7 @@
 
 FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
 {
+  _stateList.mpc = new FSMState_MPC(_data);
   _stateList.passive = new FSMState_Passive(_data);
   // _stateList.balanceStand = new FSMState_BalanceStand(_data);
   _stateList.transformUp = new FSMState_TransformUp(_data);
@@ -28,6 +29,7 @@ FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
   // _stateList.rlHopturn = new FSMState_RL_Hopturn(_data, &_data->params->rl_hopturn_params, "hopturn");
   _stateMap = {
     {"idle", _stateList.passive},
+    {"mpc", _stateList.mpc},
     // {FSMStateName::BALANCE_STAND, nullptr},
     {"transform_up", _stateList.transformUp},
     {"joint_pd", _stateList.jointPD},
