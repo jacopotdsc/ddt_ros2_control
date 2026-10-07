@@ -1,8 +1,9 @@
 #include "keyboard_controller/keyboard_controller.hpp"
+#include <algorithm>
 
 const std::vector<std::pair<char, std::string>> KeyboardControllerNode::fsm_state_mapping = {
-  {'0', "rl_0"}, {'1', "rl_1"}, {'2', "rl_2"},         {'3', "rl_3"},           {'4', "rl_4"},
-  {'5', "jump"}, {'6', "idle"}, {'7', "transform_up"}, {'8', "transform_down"}, {'9', "joint_pd"}};
+{'0', "rl_0"}, {'1', "rl_1"}, {'2', "rl_2"},         {'3', "rl_3"},           {'4', "mpc"},
+  {'5', "residual"}, {'6', "idle"}, {'7', "transform_up"}, {'8', "transform_down"}, {'9', "joint_pd"}};
 
 KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & options)
 : Node("keyboard_controller", options)
@@ -25,6 +26,37 @@ KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & optio
       posestamped_publisher_);
   realtime_fsm_goal_publisher_ =
     std::make_shared<realtime_tools::RealtimePublisher<std_msgs::msg::String>>(fsm_goal_publisher_);
+  mpx_keys_locked_subscription_ = this->create_subscription<std_msgs::msg::Bool>(
+    ros_topic::mpx_keys_locked, qos, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+      if (mpx_keys_locked_.exchange(msg->data) != msg->data) print_interface();
+    });
+  fsm_state_subscription_ = this->create_subscription<std_msgs::msg::String>(
+    ros_topic::fsm_state, rclcpp::QoS(1).reliable().transient_local(),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      {
+        std::lock_guard<std::mutex> lock(fsm_state_mutex_);
+        if (fsm_state_ == msg->data) return;
+        fsm_state_ = msg->data;
+      }
+      // The keyboard mode always follows the FSM state it sees, whoever caused the change
+      // (MPX stopped -> transform_down, end of the fold -> idle, command_watchdog, another
+      // command source). RL states carry the policy name (e.g. rl_flat): rl_N is kept.
+      const auto & state = msg->data;
+      const bool known = std::any_of(
+        fsm_state_mapping.begin(), fsm_state_mapping.end(),
+        [&state](const auto & pair) { return pair.second == state; });
+      const bool follow = known && state != fsm_goal_.data;
+      if (follow) {
+        fsm_goal_.data = state;
+        twist_ = geometry_msgs::msg::Twist();
+        mpx_keys_locked_ = false;
+      }
+      print_interface();
+      if (follow) {
+        std::cout << RED << "  FSM in " << state << " (not from this keyboard): mode set to "
+                  << state << RESET << std::endl;
+      }
+    });
 
   this->timer_ =
     this->create_wall_timer(10ms, std::bind(&KeyboardControllerNode::PubCmdVelCallBack, this));
@@ -38,6 +70,7 @@ KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & optio
   fsm_goal_.data = "idle";
   print_interface();
 }
+
 void KeyboardControllerNode::print_interface()
 {
   system("clear");
@@ -70,7 +103,20 @@ void KeyboardControllerNode::print_interface()
   )" << std::endl;
   std::cout << std::fixed << std::setprecision(2);
   std::cout << std::setw(36) << "state machine now: " << std::setw(6) << GREEN << fsm_goal_.data
-            << RESET << std::endl;
+            << RESET;
+  const std::string fsm_state = FsmState();
+  if (!fsm_state.empty() && fsm_state != fsm_goal_.data) {
+    std::cout << "  (FSM: " << fsm_state << ")";
+  }
+  std::cout << std::endl;
+  if (fsm_goal_.data == "mpc" && !MpxRunning()) {
+    std::cout << RED << "  MPX NOT RUNNING: MPC unavailable, the current state stays active"
+              << RESET << std::endl;
+  }
+  if (mpx_keys_locked_) {
+    std::cout << RED << "  MPX transition (compile / height ramp / RL handoff): motion keys locked"
+              << RESET << std::endl;
+  }
   std::cout << R"(
   -------------------------------------------------------
        "r": reset velocity, "y" : reset orientation
@@ -86,9 +132,13 @@ void KeyboardControllerNode::print_interface()
   std::cout << "  y_vel(←→):" << std::setw(6) << YELLOW << twist_.linear.y << RESET
             << "  z_vel(↑↓):" << std::setw(6) << YELLOW << twist_.linear.z << RESET << std::endl;
 
+  std::cout << "  height(PgUp/PgDn):" << std::setw(6) << YELLOW << pose_.pose.position.z
+            << RESET << " m" << std::endl;
+
   std::cout << "  pitch(jl):" << std::setw(6) << CYAN << rpy_[0] << RESET
             << "   roll(ik):" << std::setw(6) << CYAN << rpy_[1] << RESET
             << "   yaw(uo): " << std::setw(6) << CYAN << rpy_[2] << RESET << std::endl;
+  std::cout << "  Space: all velocities and rpy to 0, height kept" << std::endl;
 }
 
 int KeyboardControllerNode::get_key()
@@ -119,13 +169,41 @@ void KeyboardControllerNode::ReadKeyThread()
 {
   while (rclcpp::ok()) {
     int key = get_key();
-    // 遍历映射表查找匹配的键
-    for (const auto & pair : fsm_state_mapping) {
-      if (key == pair.first) {
-        fsm_goal_.data = pair.second;
-        break;
+    // Nobody releases the lock if MPX is not running (e.g. never started on the robot).
+    const bool mpx_running = MpxRunning();
+    if (!mpx_running) mpx_keys_locked_ = false;
+    const auto mode = std::find_if(
+      fsm_state_mapping.begin(), fsm_state_mapping.end(),
+      [key](const auto & pair) { return pair.first == key; });
+    if (mode != fsm_state_mapping.end()) {
+      const std::string & goal = mode->second;
+      // The FSM may still be in mpc after another key (e.g. an unknown rl_N).
+      const bool in_mpc = FsmState() == "mpc";
+      const bool from_mpc = fsm_goal_.data == "mpc" || in_mpc;
+      // The FSM never leaves mpc for these modes: keep showing mpc.
+      if (in_mpc && (goal == "transform_up" || goal == "residual")) continue;
+      if (goal == "mpc" && !from_mpc) {
+        // MPX starts at rest and ramps to h_mpc: mirror it and lock the motion keys
+        // until MPX releases them.
+        twist_ = geometry_msgs::msg::Twist();
+        pose_.pose.position.z = MPC_START_HEIGHT;
+        mpx_keys_locked_ = mpx_running;
+      } else if ((goal.rfind("rl_", 0) == 0 || goal == "transform_down") && from_mpc) {
+        // MPX stops the robot and lowers it before handing off (keys stay locked meanwhile).
+        twist_ = geometry_msgs::msg::Twist();
+      } else if (goal != "mpc") {
+        mpx_keys_locked_ = false;
       }
+      fsm_goal_.data = goal;
+      print_interface();
+      continue;
     }
+    // While MPX is in a transition only Space and Ctrl+C act: the other keys are read
+    // (so escape sequences are consumed) and then undone.
+    const bool locked = mpx_keys_locked_ && key != ' ';
+    const auto twist = twist_;
+    const auto pose = pose_;
+    const std::array<double, 3> rpy{rpy_[0], rpy_[1], rpy_[2]};
     switch (key) {
       case 'w':
         twist_.linear.x += STEP_ACCL_X * speed_scale_;
@@ -180,6 +258,16 @@ void KeyboardControllerNode::ReadKeyThread()
             case 'D':  // Left
               twist_.linear.y += STEP_ACCL_X * speed_scale_;
               break;
+            case '5':  // Page Up: ESC [ 5 ~
+              if (get_key() == '~') {
+                pose_.pose.position.z += STEP_HEIGHT * pose_scale_;
+              }
+              break;
+            case '6':  // Page Down: ESC [ 6 ~
+              if (get_key() == '~') {
+                pose_.pose.position.z -= STEP_HEIGHT * pose_scale_;
+              }
+              break;
             default:
               break;
           }
@@ -206,12 +294,21 @@ void KeyboardControllerNode::ReadKeyThread()
       case 'y':
         rpy_[0] = rpy_[1] = rpy_[2] = 0;
         break;
-      case '\x03':  // Ctrl+C
-        std::cout << "KEYBOARD WILL BE BACK..." << std::endl;
-        rclcpp::shutdown();
+      case ' ':  // Space: stop everything, keep the commanded height
+        twist_ = geometry_msgs::msg::Twist();
+        rpy_[0] = rpy_[1] = rpy_[2] = 0;
+        pose_.pose.position.y = 0.0;
         break;
+      case '\x03':  // Ctrl+C: quit
+        rclcpp::shutdown();
+        return;
       default:
         break;
+    }
+    if (locked) {
+      twist_ = twist;
+      pose_ = pose;
+      std::copy(rpy.begin(), rpy.end(), rpy_);
     }
     speed_scale_ = clamp(speed_scale_, 0.1, 4.0);
     pose_scale_ = clamp(pose_scale_, 0.1, 4.0);
@@ -234,8 +331,44 @@ void KeyboardControllerNode::ReadKeyThread()
   }
 }
 
+std::string KeyboardControllerNode::FsmState()
+{
+  std::lock_guard<std::mutex> lock(fsm_state_mutex_);
+  return fsm_state_;
+}
+
+bool KeyboardControllerNode::MpxRunning()
+{
+  return this->count_publishers(mpx_keys_locked_subscription_->get_topic_name()) > 0;
+}
+
+void KeyboardControllerNode::CheckRlControllerAlive()
+{
+  bool alive = false;
+  for (const auto & info : this->get_subscriptions_info_by_topic(fsm_goal_publisher_->get_topic_name())) {
+    const auto & name = info.node_name();
+    const std::string suffix = "_rl_controller";
+    if (name.size() >= suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      alive = true;
+    }
+  }
+  if (rl_controller_seen_ && !alive && fsm_goal_.data != "idle") {
+    // A restarted controller must not receive the old mode (e.g. rl_0 or mpc).
+    fsm_goal_.data = "idle";
+    mpx_keys_locked_ = false;
+    print_interface();
+    std::cout << RED << "  rl_controller gone: state set to idle" << RESET << std::endl;
+  }
+  rl_controller_seen_ = alive;
+}
+
 void KeyboardControllerNode::PubCmdVelCallBack()
 {
+  if (++alive_check_count_ >= 50) {  // every 0.5 s
+    alive_check_count_ = 0;
+    CheckRlControllerAlive();
+  }
   if (realtime_cmd_vel_publisher_ && realtime_cmd_vel_publisher_->trylock()) {
     realtime_cmd_vel_publisher_->msg_ = twist_;
     realtime_cmd_vel_publisher_->unlockAndPublish();

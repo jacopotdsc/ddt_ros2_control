@@ -5,13 +5,14 @@ from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 from launch.actions import OpaqueFunction, DeclareLaunchArgument
 import xacro
-import sys
 
 
 def launch_setup(context, *args, **kwargs):
     robot_name = LaunchConfiguration("robot").perform(context)
-    # nn = LaunchConfiguration("namespace").perform(context)
-    nn = ""
+    # Same namespace as hardware_bridge.launch.py. The estimator and MPX use relative
+    # topics, so they follow it (the keyboard and MPX must run in the same namespace).
+    nn = LaunchConfiguration("namespace").perform(context)
+    command_timeout = float(LaunchConfiguration("command_timeout").perform(context))
 
     robot_xacro_path = os.path.join(
         get_package_share_directory(robot_name + "_description"),
@@ -85,6 +86,25 @@ def launch_setup(context, *args, **kwargs):
         rl_controller_spawner,
     ]
 
+    # Lost WiFi / keyboard / remote: fold the robot instead of keeping the last command.
+    # Needs this launch to survive the disconnection (tmux, nohup or systemd, not a bare ssh).
+    if command_timeout > 0:
+        nodes.append(Node(
+            package="rl_controller", executable="command_watchdog", output="screen",
+            namespace=nn, parameters=[{"timeout": command_timeout}],
+        ))
+
+    # TITA only (the filter is written for its 8 joints and wheels). Always runs, as in
+    # sim_gazebo.launch.py, so the filter can be checked on the robot without MPX.
+    if robot_name == "tita":
+        nodes.append(Node(
+            package="tita_state_estimator", executable="state_estimator_node", output="screen",
+            namespace=nn,
+        ))
+
+    # MPX is not started here: run it by hand in another terminal, in the same namespace
+    # (mpx_node_cpp with base_state_source: filter, see MPX_INTEGRATION_CHANGES.md).
+
     return nodes
 
 
@@ -98,13 +118,21 @@ def generate_launch_description():
             description="Path to the robot description file",
         )
     )
-    # declared_arguments.append(
-    #     DeclareLaunchArgument(
-    #         "ns",
-    #         default_value="",
-    #         description="Namespace of launch",
-    #     )
-    # )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "command_timeout",
+            default_value="1.0",
+            description="s without commands (keyboard/remote twist) before transform_down; 0 disables",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "namespace",
+            # Empty like the MPX nodes and the keyboard started with ros2 run (relative topics).
+            default_value="",
+            description="namespace of robot",
+        )
+    )
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]
     )

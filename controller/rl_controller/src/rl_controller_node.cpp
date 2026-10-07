@@ -74,6 +74,44 @@ controller_interface::CallbackReturn RlController::on_configure(
     ros_topic::manager_key_command, qos,
     std::bind(&RlController::fsm_goal_cb, this, std::placeholders::_1));
 
+  mpc_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+    ros_topic::mpx_effort, rclcpp::QoS(1),
+    [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(controlData_->mpc_command.mutex);
+      auto & mpc = controlData_->mpc_command;
+      if (msg->data.size() != joint_names_.size() ||
+          !std::all_of(msg->data.begin(), msg->data.end(), [](double v) { return std::isfinite(v); })) {
+        RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
+          "Invalid MPX torque vector ignored; keeping the previous command.");
+        return;
+      }
+      mpc.effort = msg->data;
+      mpc.received = std::chrono::steady_clock::now();
+      mpc.q_des.clear();  // pure torque: no low-level PD
+      mpc.qd_des.clear();
+      mpc.valid = true;
+    });
+  mpc_joint_command_subscription_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
+    ros_topic::mpx_joint_command, rclcpp::QoS(1).best_effort(),
+    [this](const sensor_msgs::msg::JointState::SharedPtr msg) { mpc_joint_command_cb(*msg); });
+  llc_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+    ros_topic::mpx_llc_command, rclcpp::QoS(1).best_effort(),
+    [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(controlData_->mpc_command.mutex);
+      if (msg->data.size() != joint_names_.size() ||
+          !std::all_of(msg->data.begin(), msg->data.end(), [](double v) { return std::isfinite(v); })) return;
+      controlData_->mpc_command.llc_effort = msg->data;
+      controlData_->mpc_command.llc_received = std::chrono::steady_clock::now();
+    });
+  mpc_handoff_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
+    ros_topic::mpx_handoff, rclcpp::QoS(1),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(controlData_->mpc_command.mutex);
+      controlData_->mpc_command.handoff = msg->data;
+    });
+  fsm_state_publisher_ = std::make_shared<realtime_tools::RealtimePublisher<std_msgs::msg::String>>(
+    get_node()->create_publisher<std_msgs::msg::String>(
+      ros_topic::fsm_state, rclcpp::QoS(1).reliable().transient_local()));
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -102,8 +140,8 @@ controller_interface::InterfaceConfiguration RlController::state_interface_confi
 controller_interface::return_type RlController::update(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
-  (void)time;
   (void)period;
+  last_update_ns_.store(time.nanoseconds());  // clock of the joint states
   if (param_listener_->is_old(params_)) {
     params_ = param_listener_->get_params();
     update_control_parameters();
@@ -133,6 +171,12 @@ controller_interface::return_type RlController::update(
   // clang-format on
   // Control Update
   FSMController_->run();
+  const auto & fsm_state = FSMController_->getCurrentStateName();
+  if (fsm_state != fsm_state_published_ && fsm_state_publisher_->trylock()) {
+    fsm_state_publisher_->msg_.data = fsm_state;
+    fsm_state_publisher_->unlockAndPublish();
+    fsm_state_published_ = fsm_state;
+  }
   // Update torque
   for (uint id = 0; id < joints_.size(); id++) {
     joints_[id]->position_command_handle->get().set_value(controlData_->low_cmd->qd[id]);
@@ -332,10 +376,94 @@ void RlController::posestamped_cb(const geometry_msgs::msg::PoseStamped::SharedP
   cmd->pose_orientation[quat::QW] = msg->pose.orientation.w;
 }
 
+void RlController::mpc_joint_command_cb(const sensor_msgs::msg::JointState & msg)
+{
+  const auto n = joint_names_.size();
+  std::vector<double> tau(n), q(n), qd(n);
+  bool ok = msg.name.size() == msg.position.size() && msg.name.size() == msg.velocity.size() &&
+            msg.name.size() == msg.effort.size();
+  for (size_t i = 0; ok && i < n; ++i) {
+    auto it = std::find(msg.name.begin(), msg.name.end(), joint_names_[i]);
+    if (it == msg.name.end()) {
+      ok = false;
+      break;
+    }
+    auto j = std::distance(msg.name.begin(), it);
+    tau[i] = msg.effort[j];
+    q[i] = msg.position[j];
+    qd[i] = msg.velocity[j];
+    ok = std::isfinite(tau[i]) && std::isfinite(q[i]) && std::isfinite(qd[i]);
+  }
+  if (!ok) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
+      "Invalid MPX joint command ignored; keeping the previous command.");
+    return;
+  }
+  // Controller-manager time of the last update: same clock as the joint_states stamps
+  // (the node clock follows /clock, which lags in simulation).
+  const rclcpp::Time now(last_update_ns_.load(), RCL_ROS_TIME);
+  std::vector<double> llc_us, latency_ms;
+  {
+    std::lock_guard<std::mutex> lock(controlData_->mpc_command.mutex);
+    auto & mpc = controlData_->mpc_command;
+    mpc.effort = std::move(tau);
+    mpc.q_des = std::move(q);
+    mpc.qd_des = std::move(qd);
+    mpc.received = std::chrono::steady_clock::now();
+    // FSM may enter MPC once WBC is publishing. FSMState_MPC applies the
+    // hierarchical output only after the independent LLC publishes its torque.
+    mpc.valid = true;
+    mpc.llc_effort.clear();
+    // Restart the benchmark window after a pause in the commands (standby, first message).
+    if (mpc_stats_start_.nanoseconds() == 0 ||
+        now - mpc_last_command_ > rclcpp::Duration::from_seconds(1.0)) {
+      mpc_stats_start_ = now;
+      mpc.llc_us.clear();
+      mpc.latency_ms.clear();
+    }
+    mpc_last_command_ = now;
+    // Feedback stamp -> command available here (resolution: one update period).
+    mpc.latency_ms.push_back((now - rclcpp::Time(msg.header.stamp, RCL_ROS_TIME)).seconds() * 1e3);
+    if (now - mpc_stats_start_ < rclcpp::Duration::from_seconds(5.0)) return;
+    llc_us.swap(mpc.llc_us);
+    latency_ms.swap(mpc.latency_ms);
+  }
+  auto stats = [](std::vector<double> & v, double & p50, double & p95, double & max) {
+    p50 = p95 = max = 0.0;
+    if (v.empty()) return;
+    std::sort(v.begin(), v.end());
+    p50 = v[v.size() / 2];
+    p95 = v[std::min(v.size() - 1, size_t(0.95 * v.size()))];
+    max = v.back();
+  };
+  double l50, l95, lmax, c50, c95, cmax;
+  const double elapsed = (now - mpc_stats_start_).seconds();
+  const double rate = latency_ms.size() / elapsed;
+  stats(latency_ms, l50, l95, lmax);
+  stats(llc_us, c50, c95, cmax);
+  if (!llc_us.empty()) {
+    RCLCPP_INFO(get_node()->get_logger(),
+      "MPC low level: WBC commands %.1f Hz, feedback->command ms median=%.2f p95=%.2f max=%.2f; "
+      "LLC %zu ticks (%.1f Hz), us median=%.2f p95=%.2f max=%.2f",
+      rate, l50, l95, lmax, llc_us.size(), llc_us.size() / elapsed, c50, c95, cmax);
+  }
+  mpc_stats_start_ = now;
+}
+
 void RlController::fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(fsm_goal_mutex_);
   auto cmd = controlData_->rc_data;
+  if (cmd->fsm_name_ != msg->data) {
+    std::lock_guard<std::mutex> mpc_lock(controlData_->mpc_command.mutex);
+    if (msg->data == "mpc") controlData_->mpc_command.valid = false;
+    if (msg->data == "mpc") controlData_->mpc_command.handoff.clear();
+    if (msg->data == "mpc") {
+      RCLCPP_INFO(get_node()->get_logger(), "MPC requested: waiting for compilation/valid MPX torque; current state remains active. No timeout.");
+    } else if (msg->data == "residual") {
+      RCLCPP_WARN(get_node()->get_logger(), "Residual mode is not implemented; keeping current state.");
+    }
+  }
   cmd->fsm_name_ = msg->data;
 }
 
@@ -376,6 +504,7 @@ void RlController::update_control_parameters()
   get_node()->get_parameter<std::vector<long int>>("wheel_indices", param->wheel_indices);
   get_node()->get_parameter<std::vector<long int>>("hip_indices", param->hip_indices);
   get_node()->get_parameter<std::vector<scalar_t>>("torque_limit", param->torque_limit);
+  get_node()->get_parameter<scalar_t>("mpc_command_timeout", param->mpc_command_timeout);
   get_node()->get_parameter<std::vector<std::string>>("rl_policy_names", param->rl_policy_names);
 
   // TransformUpParameters

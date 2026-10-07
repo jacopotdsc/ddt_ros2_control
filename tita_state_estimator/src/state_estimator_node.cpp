@@ -60,7 +60,7 @@ public:
       "~/reset",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
-        initialized_filter_ = false;
+        pause("reset requested", 0.0);
         res->success = true;
         res->message = "Filter will be re-initialized from the current joint/IMU state.";
         RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
@@ -113,9 +113,11 @@ private:
   {
     if (!state_filter_ptr_ || !received_imu_) return;
 
-    if (std::abs((t_now - last_imu_stamp_).seconds()) > max_input_age_) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "IMU and joint stamps out of sync: estimate paused");
-      initialized_filter_ = false;  // restart from the current state once data resumes
+    const double imu_age = (t_now - last_imu_stamp_).seconds();
+    if (std::abs(imu_age) > max_input_age_) {
+      // No IMU in step with the joints (e.g. IMU messages lost): restart from the current
+      // state once data resumes.
+      pause("IMU and joint stamps out of sync", imu_age, t_now);
       return;
     }
 
@@ -143,12 +145,20 @@ private:
       initialized_filter_ = true;
       t_prev_ = t_now;
       state_filter_ptr_->set_initial_condition(filter_params.segment<N_JOINTS>(4), imu_orientation_);
-      RCLCPP_INFO(get_logger(), "Filter initialized (wheels assumed on the ground)");
+      if (reinit_count_++ == 0) {
+        RCLCPP_INFO(get_logger(), "Filter initialized (wheels assumed on the ground)");
+      } else {
+        RCLCPP_INFO(
+          get_logger(), "Filter re-initialized #%d after %.3f s paused (%s); x, y and velocity restart from 0",
+          reinit_count_ - 1, pause_start_.nanoseconds() > 0 ? (t_now - pause_start_).seconds() : 0.0,
+          pause_reason_.c_str());
+      }
+      pause_start_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
 
     const double dt = (t_now - t_prev_).seconds();
-    if (dt < 0.0 || dt > max_input_age_) {  // time jumped back (sim reset) or data gap
-      initialized_filter_ = false;
+    if (dt < 0.0 || dt > max_input_age_) {
+      pause(dt < 0.0 ? "time jumped back (simulation reset?)" : "gap in the joint states", dt, t_now);
       return;
     }
     t_prev_ = t_now;
@@ -184,6 +194,17 @@ private:
     filtered_state_pub_->publish(msg);
   }
 
+  // Stops the estimate until the next synchronized sample, which re-initializes the filter.
+  // Logs once per pause (not per sample) with the reason.
+  void pause(const std::string & reason, double seconds, const rclcpp::Time & t_now = rclcpp::Time(0, 0, RCL_ROS_TIME))
+  {
+    if (!initialized_filter_) return;  // already paused or never started
+    initialized_filter_ = false;
+    pause_reason_ = reason;
+    pause_start_ = t_now;
+    RCLCPP_WARN(get_logger(), "%s (%.3f s): estimate paused", reason.c_str(), seconds);
+  }
+
   struct JointSample
   {
     double pos = 0.0;
@@ -201,6 +222,9 @@ private:
 
   bool received_imu_ = false;
   bool initialized_filter_ = false;
+  int reinit_count_ = 0;  // initializations so far (the first is the start-up one)
+  std::string pause_reason_;
+  rclcpp::Time pause_start_{0, 0, RCL_ROS_TIME};
   double max_input_age_ = 0.1;
   rclcpp::Time t_prev_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_imu_stamp_{0, 0, RCL_ROS_TIME};

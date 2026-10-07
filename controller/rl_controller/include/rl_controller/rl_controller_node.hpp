@@ -15,6 +15,7 @@
 #ifndef RL_CONTROLLER__RL_CONTROLLER_NODE_HPP_
 #define RL_CONTROLLER__RL_CONTROLLER_NODE_HPP_
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -30,6 +31,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "rclcpp_lifecycle/state.hpp"
+#include "realtime_tools/realtime_publisher.hpp"
 #include "rl_controller/rl_controller_parameters.hpp"
 #include "ros_utils/topic_names.hpp"
 #include "semantic_components/imu_sensor.hpp"
@@ -85,6 +87,7 @@ protected:
   void cmd_vel_cb(const geometry_msgs::msg::Twist::SharedPtr msg);
   void posestamped_cb(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
   void fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg);
+  void mpc_joint_command_cb(const sensor_msgs::msg::JointState & msg);
   void joy_cb(const sensor_msgs::msg::Joy::SharedPtr msg);
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscription_;
@@ -92,7 +95,14 @@ protected:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fsm_goal_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr mpc_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr llc_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mpc_handoff_subscription_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr mpc_joint_command_subscription_;
+  rclcpp::Time mpc_stats_start_{0, 0, RCL_ROS_TIME}, mpc_last_command_{0, 0, RCL_ROS_TIME};
+  std::atomic<int64_t> last_update_ns_{0};
+  // Current FSM state, published on change (MPX knows whether its torque is applied).
+  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::String>> fsm_state_publisher_;
+  std::string fsm_state_published_;
   sensor_msgs::msg::Joy::SharedPtr joy_msg_ = nullptr;
 
 protected:

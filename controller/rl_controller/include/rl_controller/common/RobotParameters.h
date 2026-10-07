@@ -102,6 +102,8 @@ struct RobotControlParameters
   // scalar_t dt;           // actual control period
   int update_rate{500};  // control loop update rate
   std::vector<scalar_t> torque_limit;
+  // s without a new MPX torque before the "mpc" state gives up and folds (transform_down).
+  scalar_t mpc_command_timeout{1.0};
 
   CarParameters car_params;
   TransformUpParameters transform_up_params;

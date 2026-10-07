@@ -48,6 +48,9 @@
       
       # control parameters
       torque_limit: [60.0, 60.0, 60.0, 20.0, 60.0, 60.0, 60.0, 20.0]
+      # s without a new MPX torque (LLC/WBC/MPC stopped or dead): the "mpc" state stops
+      # applying the last torque and folds the robot (transform_down).
+      mpc_command_timeout: 1.0
       wheel_indices: [3, 7]
       hip_indices: [0, 4]
 

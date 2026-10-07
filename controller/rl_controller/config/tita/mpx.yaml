@@ -1,0 +1,30 @@
+# MPX parameters for the RL/MPC switching, loaded on top of mpx/config/mpx_node.yaml
+# by sim_gazebo.launch.py, and by hand on the robot (hw.launch.py does not start MPX).
+# Topic names are relative: MPX runs in the robot namespace, like the controllers of
+# controllers.yaml (see ros_utils/topic_names.hpp).
+/**:
+  # Every MPX node: controller (MPC, or the Python node) and wbc (mpx_wbc_node).
+  ros__parameters:
+    behavior:
+      publish_default_commands: false  # the keyboard publishes the commands
+
+    inputs:
+      robot_description_topic: robot_description
+      joint_states_topic: joint_states
+      filtered_state_topic: filtered_state     # tita_state_estimator
+      mode_command_topic: command/cmd_key
+      fsm_state_topic: fsm_state               # published by rl_controller
+      pose_command_topic: command/cmd_pose
+      cmd_vel_topic: command/cmd_twist
+
+    outputs:
+      effort_command_topic: mpx/effort         # applied by the rl_controller "mpc" state (Python node)
+      joint_command_topic: mpx/joint_command   # WBC tau_ff + q_des/qd_des for the "mpc" low level (C++ nodes)
+      llc_command_topic: mpx/llc_command       # tracked torque, applied by the ros2_control FSM
+      trajectory_topic: mpx/trajectory         # MPC -> WBC (C++ nodes)
+      handoff_topic: mpx/handoff
+      keys_locked_topic: mpx/keys_locked
+      estimate_topic_prefix: mpx/estimate
+
+    mpc_rl_handoff:
+      rl_modes: ["rl_0"]  # one per rl_policy_names entry in controllers.yaml

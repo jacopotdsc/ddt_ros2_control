@@ -14,6 +14,7 @@
 
 #ifndef RL_CONTROLLER__FSM__CONTROLFSMDATA_H_
 #define RL_CONTROLLER__FSM__CONTROLFSMDATA_H_
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -36,6 +37,14 @@ struct MpcCommand
   uint64_t seq = 0;              // incremented on every new MPX torque
   std::condition_variable cv;    // notified on every new MPX torque
   std::string handoff;
+  // mpx/joint_command (WBC output): joint targets for the low-level PD around the
+  // feedforward torque. Empty when MPX publishes only mpx/effort (pure torque).
+  std::vector<double> q_des, qd_des;
+  std::vector<double> llc_effort;
+  std::chrono::steady_clock::time_point received{};      // effort (mpx/effort or WBC tau_ff)
+  std::chrono::steady_clock::time_point llc_received{};  // llc_effort
+  // Benchmark samples, logged and cleared by the joint_command callback every 5 s.
+  std::vector<double> llc_us, latency_ms;
 };
 
 struct ControlFSMData
