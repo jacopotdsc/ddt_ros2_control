@@ -1,0 +1,84 @@
+# This config file is used by mpx_node.py (node /mpx/controller).
+# Every parameter is required: the node has no built-in defaults.
+# Robot model, MPC/WBC weights and horizons stay in mpx_tita/mpx/config/config_tita.py.
+# Launch files may override single values (e.g. sim_gazebo.launch.py sets the
+# namespaced topics and the RL-mode integration).
+/**:
+  # Every MPX node: controller (MPC, or the Python node) and wbc (mpx_wbc_node).
+  ros__parameters:
+    behavior:
+      precompile: true                # JIT-compile MPC/WBC before taking control
+      publish_default_commands: true  # zero /mpx/cmd_vel until an external source connects
+      publish_estimate: true          # believed state on /mpx/estimate/* (Rerun logger)
+
+    # C++ path: MPC publishes the plan; WBC holds U[0] and recomputes on fresh feedback
+    # publishes tau_ff/q_des/qd_des; LLC tracks the latest WBC command at joint rate.
+    timing:
+      mpc_frequency: 40.0        # Hz; dt_mpc=25 ms, warm start shifts one whole node
+      wbc_frequency: 100.0       # Hz; reuses the latest U[0] between 40 Hz MPC plans
+      llc_frequency: 500.0       # Hz, limited by joint_states (controller manager: 500 Hz)
+      # Wall-clock seconds since MPC's last active trajectory; expiry makes WBC
+      # stop computing/publishing commands. It does not itself change the FSM mode.
+      trajectory_timeout: 0.1
+      # Seconds (joint_states clock) since the last WBC command; expiry makes the LLC stop
+      # publishing, and rl_controller then folds after its mpc_command_timeout.
+      wbc_command_timeout: 1.0
+
+    inputs:
+      robot_description_topic: /tita/robot_description
+      robot_description_timeout: 30.0          # s, wait for the URDF at startup
+      # Base pose/twist source: "ground_truth" = gazebo ModelStates (simulation only),
+      # "filter" = nav_msgs/Odometry from tita_state_estimator (simulation and hardware),
+      # "odometry" = chassis odometry for x, y and horizontal velocity + filter for the rest.
+      base_state_source: filter                # "ground_truth", "filter" or "odometry"
+      model_name: tita                         # entity name in gazebo ModelStates
+      model_states_topic: /model_states        # gazebo_msgs/ModelStates, base pose/twist
+      filtered_state_topic: /filtered_state    # nav_msgs/Odometry, twist in the base frame
+      # nav_msgs/Odometry of the robot chassis (no z), used with "odometry".
+      odometry_topic: /tita4267305/chassis/odometry
+      joint_states_topic: /tita/joint_states   # sensor_msgs/JointState
+      # std_msgs/String with the FSM mode ("mpc", "rl_N", "idle", ...).
+      # Empty = MPX always active; set = MPX runs only in "mpc" mode.
+      mode_command_topic: ""
+      # std_msgs/String, current RL FSM state (rl_controller). Empty = unused: MPX then
+      # cannot tell idle/transform_down (the FSM never enters "mpc" from there).
+      fsm_state_topic: ""
+      # geometry_msgs/PoseStamped; position.z is the COM height command. Empty = unused.
+      pose_command_topic: ""
+      cmd_vel_topic: /mpx/cmd_vel              # geometry_msgs/Twist, velocity command (vx, vz, wz)
+      com_height_topic: /mpx/com_height        # std_msgs/Float64, COM height command
+
+    outputs:
+      effort_command_topic: /tita/effort_controller/commands  # Float64MultiArray, 8 joints (Python node)
+      # sensor_msgs/JointState: effort = tau_ff, position = q_des, velocity = qd_des (C++ node)
+      joint_command_topic: /mpx/joint_command
+      llc_command_topic: /mpx/llc_command      # LLC tracked torque to rl_controller
+      # std_msgs/Float64MultiArray, MPC -> WBC trajectory (layout in include/mpx/node_common.hpp)
+      trajectory_topic: /mpx/trajectory
+      # Bool, true while velocity/height commands are ignored (keyboard lock):
+      # MPX compiling, ramping to h_mpc after "mpc", or handing off to RL.
+      keys_locked_topic: /mpx/keys_locked
+      handoff_topic: mpx/handoff         # String, RL mode MPX has handed control to
+      # Believed state (com, com_vel, base_rpy, left/right_wheel) when behavior.publish_estimate.
+      estimate_topic_prefix: /mpx/estimate
+
+    # LLC PD gains for the eight TITA joints. Wheels use velocity damping only.
+    llc:
+      joint_names: [joint_left_leg_1, joint_left_leg_2, joint_left_leg_3, joint_left_leg_4,
+                    joint_right_leg_1, joint_right_leg_2, joint_right_leg_3, joint_right_leg_4]
+      joint_kp: [20.0, 20.0, 20.0, 0.0, 20.0, 20.0, 20.0, 0.0]
+      joint_kd: [1.0, 1.0, 1.0, 0.3, 1.0, 1.0, 1.0, 0.3]
+      max_torque: [60.0, 60.0, 60.0, 20.0, 60.0, 60.0, 60.0, 20.0]
+
+    # On an "rl_N" request MPX zeroes velocity, drives the COM to h_rl and releases control
+    # once it holds there (or after the timeout). transform_down has no handoff: the FSM
+    # folds at once and MPX goes to standby (safety command).
+    mpc_rl_handoff:
+      h_mpc: 0.4                    # m, COM height MPX drives to on every "mpc" activation
+      h_rl: 0.31                    # m, COM height handed to the RL policy
+      rl_modes: ["rl_0"]            # RL modes MPX hands off to: one per rl_policy_names entry
+                                    # of rl_controller (others are ignored, like the FSM does)
+      height_tol: 0.03              # m, |COM z - handoff height|
+      vz_tol: 0.05                  # m/s, |COM vz|
+      settle_time: 0.2              # s (sim time) within tolerance before releasing
+      timeout: 5.0                  # s (sim time), release/unlock anyway after this (also for h_mpc)

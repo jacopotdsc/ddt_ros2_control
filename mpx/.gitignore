@@ -1,0 +1,18 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated logs and JSON results
+*.log
+*.json
+
+# Generated plots
+*.png
+
+# Local tests and generated results
+/test_results/
+/tests/
+
+# JAX compilation cache
+jax_cache/

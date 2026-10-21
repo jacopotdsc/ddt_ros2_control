@@ -3,3 +3,4 @@ install
 log
 *.pyc
 jax_cache
+__pycache__/
