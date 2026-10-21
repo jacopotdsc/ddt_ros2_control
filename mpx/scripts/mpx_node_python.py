@@ -181,12 +181,10 @@ class MPXNode(Node):
         if self._mode_controlled:
             # The RL spawn posture is folded. It is not an upright MPC reference.
             # Keep the imported physical model, but use MPX's standing posture
-            # for posture regularization, nominal wheel spacing, and warm-up.
+            # for posture regularization and warm-up (the track width d is config.d).
             self.config.q0 = np.asarray(config.q0, dtype=float).copy()
             self.data.qpos[7:] = self.config.q0
             mujoco.mj_forward(self.model, self.data)
-            contacts = [self.model.geom(name).id for name in self.config.contact_frame]
-            self.config.d = float(np.linalg.norm(self.data.geom_xpos[contacts[0]] - self.data.geom_xpos[contacts[1]]))
 
         self.base_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY,

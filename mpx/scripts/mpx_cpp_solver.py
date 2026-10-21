@@ -1,18 +1,42 @@
-"""Numerical backend for the experimental rclcpp node.
+"""Numerical backend of the C++ MPX nodes (mpx_node_cpp = MPC, mpx_wbc_node = WBC).
 
 ROS callbacks, scheduling and mode handling live in C++. JAX/XLA and MuJoCo
-retain the exact numerical implementation of the Python reference node. This
-is deliberately not a native C++ rewrite of the MPC/WBC optimizer.
+retain the exact numerical implementation of mpx_tita. This is deliberately not
+a native C++ rewrite of the MPC/WBC optimizer. Independent of the Python node
+(mpx_node_python.py).
 """
 import gc
+import os
 import sys
-from types import SimpleNamespace
+from pathlib import Path
 
-from mpx_node import (
-    MPXNode, config, model_from_description, jax, jnp, mujoco, np,
-    BatchedMPCControllerWrapper,
+# mpx_tita: the copy installed next to this file, else the source tree.
+sys.path.insert(0, str(Path(__file__).absolute().parent / "python"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "mpx_tita"))
+
+# Small solves for one robot: CPU backend only (set before importing JAX), and no
+# BLAS/Eigen thread pools competing with Gazebo. The C++ nodes set the same.
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault(
+    "XLA_FLAGS", "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
 )
-from mpx.utils.mpc_wrapper_dfcip import ControlSol, MPCState
+
+import jax
+import jax.numpy as jnp
+import mujoco
+import numpy as np
+
+import mpx.config.config_tita as config
+from mpx.utils.mpc_wrapper_dfcip import BatchedMPCControllerWrapper, ControlSol, MPCState
+from mpx.utils.ros_model import model_from_description
+
+jax.config.update("jax_enable_x64", True)
+# The callers own their solver threads; a second dispatch queue adds latency for
+# these small CPU solves.
+jax.config.update("jax_cpu_enable_async_dispatch", False)
 
 # The C++ node calls the MPC and the WBC from two threads. JAX releases the GIL
 # while XLA runs; a short switch interval keeps the WBC thread from waiting up to
@@ -21,14 +45,9 @@ sys.setswitchinterval(5e-4)
 
 
 class Solver:
-    step_controller = MPXNode.step_controller
-    raw_state_from = MPXNode.raw_state_from
-    precompile_controller = MPXNode.precompile_controller
-
     def __init__(self, description, mode_controlled, height, log, mpc_frequency=0.):
-        self._mode_controlled = mode_controlled
+        # log: logger callback of the C++ node (unused here, kept for its constructor call).
         self._command = (0., 0., 0., height)
-        self._logger = SimpleNamespace(info=log)
         self.model, self.config = model_from_description(description, config)
         if mpc_frequency > 0:
             # The warm start shifts the previous solution by one MPC period.
@@ -42,9 +61,6 @@ class Solver:
             self.config.q0 = np.asarray(config.q0, dtype=float).copy()
             self.data.qpos[7:] = self.config.q0
             mujoco.mj_forward(self.model, self.data)
-            contacts = [self.model.geom(n).id for n in self.config.contact_frame]
-            self.config.d = float(np.linalg.norm(
-                self.data.geom_xpos[contacts[0]] - self.data.geom_xpos[contacts[1]]))
         self.base_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, self.config.base_body_name)
         self.contact_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, n)
@@ -57,8 +73,6 @@ class Solver:
         self.mpc = BatchedMPCControllerWrapper(self.config, n_env=1, model=self.model)
         self.mpc_state = self.mpc.init_state()
         self.theta_prev = np.asarray(0., dtype=np.float64)
-        self._step_controller_jit = jax.jit(self.step_controller)
-        self.initial_effort = None
         self.period_ns = round(1e9 / self.config.mpc_frequency)
         self.joint_names = list(self.config.joints_name)
         self.effort_limits = np.asarray(self.config.effort_limits, dtype=float).tolist()
@@ -77,13 +91,19 @@ class Solver:
         self.dt_mpc_ns = int(round(self.config.dt_mpc * 1e9))
         self.dof_addresses = [dof for _, dof in self.joint_addresses]
 
-    def get_logger(self):
-        return self._logger
-
-    def compile(self):
-        self.precompile_controller()
-        gc.collect()
-        gc.freeze()
+    def raw_state_from(self, data):
+        """COM, COM velocity and wheel contacts (centers, rotations, radii, velocities)."""
+        centers = data.geom_xpos[self.contact_ids].copy()
+        rotations = data.geom_xmat[self.contact_ids].reshape(2, 3, 3).copy()
+        radii = self.model.geom_size[self.contact_ids, 0].copy()
+        wheel_velocities = np.zeros((2, 3))
+        spatial_velocity = np.zeros(6)
+        for i, geom_id in enumerate(self.contact_ids):
+            mujoco.mj_objectVelocity(self.model, data, mujoco.mjtObj.mjOBJ_GEOM, int(geom_id),
+                                     spatial_velocity, 0)  # world frame
+            wheel_velocities[i] = spatial_velocity[3:6]
+        return (data.subtree_com[self.base_id].copy(), data.subtree_linvel[self.base_id].copy(),
+                centers, rotations, radii, wheel_velocities)
 
     def prepare(self, qpos, qvel, reset):
         qpos, qvel = np.asarray(qpos), np.asarray(qvel)
@@ -106,20 +126,6 @@ class Solver:
         return np.concatenate((self.raw[0], self.raw[1], self.raw[2].ravel(),
                                qpos[3:7], [float(nominal)]))
 
-    def step(self, command):
-        state, theta, tau, flags = self._step_controller_jit(
-            self.mpc_state, self.theta_prev, self.raw,
-            self.data.qpos.copy()[None, :], self.data.qvel.copy()[None, :],
-            np.asarray(command, dtype=np.float64)[None, :])
-        effort, flags = np.asarray(tau[0]), np.asarray(flags)
-        if effort.shape != (8,) or not np.all(np.isfinite(effort)) or not np.all(flags):
-            if not getattr(self, '_reported_invalid', False):
-                self._reported_invalid = True
-                self._logger.info(f"First invalid: qpos={self.data.qpos.tolist()} qvel={self.data.qvel.tolist()} command={list(command)} flags={flags.tolist()} tau={effort.tolist()}")
-            raise ValueError('Invalid MPC/WBC result; holding last valid effort')
-        self.mpc_state, self.theta_prev = state, theta
-        return effort
-
     # ── Split MPC / WBC (hierarchical C++ node) ─────────────────────────────
     # MPC and WBC stay the MPX JAX functions; only their scheduling is split.
 
@@ -133,7 +139,7 @@ class Solver:
         mpc = self.mpc
         _, x0, theta_prev = mpc.process_state(*raw, theta_prev)
         x0 = x0[None, :]
-        x_ref, u_ref = mpc._ref_gen(x0, command)
+        x_ref, u_ref, rates = mpc._ref_gen(x0, command, mpc_state.ref_rate)
         reference = jnp.concatenate([x_ref, u_ref], axis=-1)
         W = jnp.tile(W, (mpc.n_env, 1, 1))
         X, U, D = mpc._solve(reference, None, W, x0, mpc_state.X0_shifted, mpc_state.U0_shifted)
@@ -142,6 +148,7 @@ class Solver:
         new_state = MPCState(
             sol=ControlSol(a=U[:, 0, 0], ac_z=U[:, 0, 1], alpha=U[:, 0, 2], grf=U[:, 0, 3:]),
             X0_shifted=shifted(X), U0_shifted=shifted(U), D0_shifted=shifted(D),
+            ref_rate=rates[:, mpc.shift],  # the next solve continues the reference from here
         )
         ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(U))
         return new_state, theta_prev, U[0], ok

@@ -125,7 +125,7 @@ def find_mpx():
         try:
             args = path.read_bytes().split(b'\0')
             names = [Path(os.fsdecode(arg)).name for arg in args[:2] if arg]
-            if any(name in ('mpx_node_cpp', 'mpx_node.py') for name in names):
+            if any(name in ('mpx_node_cpp', 'mpx_node_python.py') for name in names):
                 matches.append(int(path.parent.name))
         except (OSError, ValueError):
             pass

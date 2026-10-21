@@ -21,7 +21,7 @@ import time
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-import mpx_cpp_solver as backend  # noqa: E402 (sets CPU/JAX policy via mpx_node)
+import mpx_cpp_solver as backend  # noqa: E402 (sets the CPU/JAX policy)
 
 import jax  # noqa: E402
 import mujoco  # noqa: E402

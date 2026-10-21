@@ -13,7 +13,8 @@ def generate_launch_description():
     cpp = PythonExpression(["'", LaunchConfiguration("mpx_implementation"), "' == 'cpp'"])
     # The C++ nodes load mpx_node.yaml and rl_controller's tita/mpx.yaml by themselves
     # (include/mpx/default_params.hpp): passing mpx_node.yaml again here would override the
-    # robot overlay (relative topics, FSM mode). mpx_node.py has no defaults: it gets both.
+    # robot overlay (relative topics, FSM mode). mpx_node_python.py has no defaults: it gets
+    # both.
     source = {"inputs.base_state_source": LaunchConfiguration("base_state_source")}
     python_params = [
         os.path.join(get_package_share_directory("mpx"), "config", "mpx_node.yaml"),
@@ -23,7 +24,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "mpx_implementation", default_value="cpp", choices=["python", "cpp"],
-            description="cpp: MPC, WBC and LLC nodes; python: the single mpx_node.py",
+            description="cpp: MPC, WBC and LLC nodes; python: the single mpx_node_python.py",
         ),
         DeclareLaunchArgument(
             "base_state_source", default_value="filter",
@@ -37,6 +38,6 @@ def generate_launch_description():
              parameters=[source], condition=IfCondition(cpp)),
         Node(package="mpx", executable="mpx_llc_node", output="screen",
              condition=IfCondition(cpp)),
-        Node(package="mpx", executable="mpx_node.py", output="screen",
+        Node(package="mpx", executable="mpx_node_python.py", output="screen",
              parameters=python_params, condition=UnlessCondition(cpp)),
     ])

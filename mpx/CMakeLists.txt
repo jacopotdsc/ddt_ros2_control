@@ -65,7 +65,7 @@ if(BUILD_TESTING)
 endif()
 
 install(PROGRAMS
-  scripts/mpx_node.py
+  scripts/mpx_node_python.py
   scripts/benchmark_mpx.py
   scripts/test_mpx_ros.py
   scripts/benchmark_ros_feedback.py

@@ -1,4 +1,4 @@
-# This config file is used by mpx_node.py (node /mpx/controller).
+# This config file is used by mpx_node_python.py (node /mpx/controller).
 # Every parameter is required: the node has no built-in defaults.
 # Robot model, MPC/WBC weights and horizons stay in mpx_tita/mpx/config/config_tita.py.
 # Launch files may override single values (e.g. sim_gazebo.launch.py sets the
