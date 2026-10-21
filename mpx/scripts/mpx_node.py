@@ -230,7 +230,7 @@ class MPXNode(Node):
         self._keys_locked = None  # last value published on keys_locked_topic
         self._generation = 0
         self._took_over = False  # an effort was published in this activation
-        self._handoff_target = None  # requested rl_N mode while moving to h_rl
+        self._handoff_target = None  # requested rl_N / transform_down while lowering the COM
         self._handoff_start = None
         self._handoff_settled = None
         self._last_received_stamp = None
@@ -512,8 +512,9 @@ class MPXNode(Node):
         This method updates the internal state of the node based on the requested mode.
         Supported modes include "mpc", "idle", "joint_pd", "transform_down", and the RL
         modes in mpc_rl_handoff.rl_modes (one per RL policy of the FSM).
-        When switching to MPX mode, it goes smoothly to h_mpc. Same when handing off to RL mode.
-        transform_down is the safety command: no handoff, MPX goes to standby at once.
+        When switching to MPX mode, it goes smoothly to h_mpc. Before handing off to an RL
+        mode or to transform_down it lowers the COM to h_rl at rest; idle and joint_pd are
+        the immediate safety commands.
         '''
         # Ignore unsupported requests, just like the RL FSM. An unknown rl_N must not be
         # handed off: the FSM would stay in "mpc" with no torque updates.
@@ -531,7 +532,7 @@ class MPXNode(Node):
             in_control = self._mode_enabled and self._took_over and not self.fsm_blocks_mpc()
             if mode == "transform_up" and in_control:
                 return  # the FSM does not leave "mpc" for transform_up
-            if rl and in_control:
+            if (rl or mode == "transform_down") and in_control:
                 # MPX keeps control and moves to the handoff height; the RL FSM switches
                 # only after check_handoff publishes the mode on handoff_topic.
                 self._activating = False

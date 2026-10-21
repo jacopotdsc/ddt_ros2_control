@@ -85,7 +85,7 @@ public:
             Lock lock(mutex_);
             fsm_ = m.data;
             if (enabled_ && took_over_ && fsm_blocks()) {
-              enabled_ = took_over_ = activating_ = false;
+              enabled_ = took_over_ = activating_ = standup_ = false;
               handoff_.clear();
               ++generation_;
               publish_standby();
@@ -202,9 +202,9 @@ private:
     bool in_control = enabled_ && took_over_ && !fsm_blocks();
     if (mode == "transform_up" && in_control)
       return;
-    // transform_down is the safety command: no handoff, MPX goes to standby
-    // while the FSM folds right away.
-    if (rl && in_control) {
+    // rl_N and transform_down: MPX lowers the COM to h_rl at rest, then hands off
+    // (idle and joint_pd are the immediate safety commands).
+    if ((rl || mode == "transform_down") && in_control) {
       activating_ = false;
       double h = h_rl_;
       if (handoff_.empty() || h != command_[3]) {
@@ -224,11 +224,15 @@ private:
     if (cancelled) {
       command_ = {0., 0., 0., h_mpc_};
       activating_ = true;
+      standup_ = false;
       activation_start_.reset();
     } else if (enabled_ != enable) {
       enabled_ = enable;
       took_over_ = false;
       activating_ = enable;
+      // Taking over from transform_up: the MPC uses the stand-up weights (W_takeover)
+      // until the COM holds at h_mpc.
+      standup_ = enable && fsm_ == "transform_up";
       activation_start_.reset();
       if (enable)
         command_ = {0., 0., 0., h_mpc_};
@@ -281,8 +285,10 @@ private:
         activating_ = false;
         publish_lock();
         RCLCPP_INFO(get_logger(),
-                    "COM at h_mpc=%.3f m: MPC commands unlocked%s", target,
-                    settled ? "" : " anyway (timeout)");
+                    "COM at h_mpc=%.3f m: MPC commands unlocked%s%s", target,
+                    settled ? "" : " anyway (timeout)",
+                    standup_ ? ", stand-up weights off" : "");
+        standup_ = false;
       }
     }
   }
@@ -410,6 +416,7 @@ private:
         Clock::time_point received;
         int64_t stamp;
         std::array<double, 4> command;
+        bool standup;
         {
           // Release the GIL while idle and during C++ message/state handling.
           py::gil_scoped_release release;
@@ -435,6 +442,7 @@ private:
           received = feedback_->joint_time;
           stamp = feedback_->joint_stamp;
           command = command_;
+          standup = activating_ && standup_;
           if (generation != generation_) {
             generation = generation_;
             next_due = 0;
@@ -503,7 +511,7 @@ private:
           ref += std::clamp(command[3] - ref, -.1 * dt, .1 * dt);
           auto ramped = command;
           ramped[3] = ref;
-          auto trajectory = values(solver_.attr("plan")(ramped));
+          auto trajectory = values(solver_.attr("plan")(ramped, standup));
           if (trajectory.size() != horizon_ * nu_)
             throw std::runtime_error("Invalid MPC trajectory size");
           if (warmup > 0) {
@@ -568,6 +576,7 @@ private:
   std::atomic<bool> failed_{false};
   bool stop_ = false, controlled_ = false, enabled_ = false, compiling_ = false,
        activating_ = false, took_over_ = false;
+  bool standup_ = false;  // taking over from transform_up: stand-up MPC weights
   bool pending_compile_ = false, estimates_ = false;
   double h_mpc_ = 0., h_rl_ = 0., height_tol_ = 0., vz_tol_ = 0.;
   int64_t settle_ns_ = 0, timeout_ns_ = 0, generation_ = 0;

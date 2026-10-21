@@ -70,12 +70,12 @@
       joint_kd: [1.0, 1.0, 1.0, 0.3, 1.0, 1.0, 1.0, 0.3]
       max_torque: [60.0, 60.0, 60.0, 20.0, 60.0, 60.0, 60.0, 20.0]
 
-    # On an "rl_N" request MPX zeroes velocity, drives the COM to h_rl and releases control
-    # once it holds there (or after the timeout). transform_down has no handoff: the FSM
-    # folds at once and MPX goes to standby (safety command).
+    # On an "rl_N" or "transform_down" request MPX zeroes velocity, drives the COM to h_rl
+    # and releases control once it holds there (or after the timeout).
+    # idle and joint_pd are the immediate safety commands: MPX goes to standby at once.
     mpc_rl_handoff:
       h_mpc: 0.4                    # m, COM height MPX drives to on every "mpc" activation
-      h_rl: 0.31                    # m, COM height handed to the RL policy
+      h_rl: 0.28                    # m, COM height handed to RL or to the fold (= h_min of config_tita.py)
       rl_modes: ["rl_0"]            # RL modes MPX hands off to: one per rl_policy_names entry
                                     # of rl_controller (others are ignored, like the FSM does)
       height_tol: 0.03              # m, |COM z - handoff height|

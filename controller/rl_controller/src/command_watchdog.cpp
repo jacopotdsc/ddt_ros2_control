@@ -3,7 +3,7 @@
 //
 // The keyboard and the remote publish the twist continuously. When no twist arrives for
 // `timeout` seconds, this node requests "transform_down" on the mode topic, like key 8:
-// from RL and from MPC the FSM folds at once.
+// from RL the FSM folds at once, from MPC after MPX has lowered the COM to h_rl.
 // It is armed by the first twist, and stops requesting once commands come back.
 
 #include <chrono>

@@ -68,6 +68,9 @@ class Solver:
         self.theta_wbc = np.asarray(0., dtype=np.float64)
         self._wbc_template = self.mpc.init_state()
         self._plan_jit = jax.jit(self.plan_controller)
+        # MPC weights: W normally, W_takeover while standing up from transform_up.
+        self.W = jnp.asarray(self.config.W)
+        self.W_takeover = jnp.asarray(self.config.W_takeover)
         self._wbc_jit = jax.jit(self.wbc_controller)
         self.horizon = int(self.config.N)
         self.nu = int(self.config.nu)
@@ -120,19 +123,19 @@ class Solver:
     # ── Split MPC / WBC (hierarchical C++ node) ─────────────────────────────
     # MPC and WBC stay the MPX JAX functions; only their scheduling is split.
 
-    def plan_controller(self, mpc_state, theta_prev, raw, command):
+    def plan_controller(self, mpc_state, theta_prev, raw, command, W):
         """MPC only: same computation as BatchedMPCControllerWrapper.run, also returning U.
 
         run() keeps only U[:, 0] (state.sol) and the shifted warm start. Publish the
         whole plan in the trajectory message; the WBC currently consumes its first input,
         matching mjx_tita.py, while recomputing on each fresh measured state.
         """
-        mpc, cfg = self.mpc, self.config
+        mpc = self.mpc
         _, x0, theta_prev = mpc.process_state(*raw, theta_prev)
         x0 = x0[None, :]
         x_ref, u_ref = mpc._ref_gen(x0, command)
         reference = jnp.concatenate([x_ref, u_ref], axis=-1)
-        W = jnp.tile(cfg.W, (mpc.n_env, 1, 1))
+        W = jnp.tile(W, (mpc.n_env, 1, 1))
         X, U, D = mpc._solve(reference, None, W, x0, mpc_state.X0_shifted, mpc_state.U0_shifted)
         D = jnp.nan_to_num(D, nan=0.0, posinf=0.0, neginf=0.0)
         shifted = mpc.shift_warm_start
@@ -174,7 +177,7 @@ class Solver:
         _, raw, command = self._nominal_raw()
         state, theta = self.mpc.init_state(), np.asarray(0., dtype=np.float64)
         for _ in range(3):
-            state, theta, U, ok = self._plan_jit(state, theta, raw, command)
+            state, theta, U, ok = self._plan_jit(state, theta, raw, command, self.W)
             jax.block_until_ready(state)
             if not bool(ok):
                 raise RuntimeError('MPX MPC warm-up produced an invalid trajectory')
@@ -205,11 +208,15 @@ class Solver:
         self.compile_wbc()
         return U
 
-    def plan(self, command):
-        """One MPC solve on the state of the last prepare(); returns U flattened (N*nu)."""
+    def plan(self, command, standup=False):
+        """One MPC solve on the state of the last prepare(); returns U flattened (N*nu).
+
+        standup: taking over from transform_up, use the stand-up weights W_takeover.
+        """
         state, theta, U, ok = self._plan_jit(
             self.mpc_state, self.theta_prev, self.raw,
-            np.asarray(command, dtype=np.float64)[None, :])
+            np.asarray(command, dtype=np.float64)[None, :],
+            self.W_takeover if standup else self.W)
         U = np.asarray(U)
         if not bool(ok) or U.shape != (self.horizon, self.nu):
             raise ValueError('Invalid MPC result; keeping the previous trajectory')

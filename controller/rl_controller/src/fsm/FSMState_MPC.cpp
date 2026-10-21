@@ -49,13 +49,15 @@ void FSMState_MPC::run()
 std::string FSMState_MPC::checkTransition()
 {
   const auto & command = _data->rc_data->fsm_name_;
-  // transform_down is the safety command: fold now, in any situation, without the MPX handoff.
-  if (command == "idle" || command == "joint_pd" || command == "transform_down") return command;
+  // idle and joint_pd are the safety commands: immediate, in any situation.
+  if (command == "idle" || command == "joint_pd") return command;
   // No MPX torque for mpc_command_timeout: fold now, without waiting for the MPX handoff.
   if (stale_) return "transform_down";
-  // For rl_N MPX first brings the robot to h_rl at rest, then publishes the handed-off mode.
+  // For rl_N and transform_down MPX first lowers the robot to h_rl at rest, then
+  // publishes the handed-off mode.
   std::lock_guard<std::mutex> lock(_data->mpc_command.mutex);
   if (_data->mpc_command.handoff != command) return "mpc";
+  if (command == "transform_down") return command;
   for (size_t i = 0; i < _data->params->rl_policy_names.size(); ++i) {
     if (command == "rl_" + std::to_string(i)) return _data->params->rl_policy_names[i];
   }

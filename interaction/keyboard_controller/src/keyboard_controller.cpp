@@ -189,8 +189,8 @@ void KeyboardControllerNode::ReadKeyThread()
         pose_.pose.position.z = MPC_START_HEIGHT;
         mpx_keys_locked_ = mpx_running;
       } else if ((goal.rfind("rl_", 0) == 0 || goal == "transform_down") && from_mpc) {
-        // rl_N: MPX stops the robot and lowers it before handing off (keys stay locked
-        // meanwhile). transform_down: the FSM folds at once, the twist is just reset.
+        // rl_N and transform_down: MPX stops the robot and lowers it before handing off
+        // (keys stay locked meanwhile).
         twist_ = geometry_msgs::msg::Twist();
       } else if (goal != "mpc") {
         mpx_keys_locked_ = false;
