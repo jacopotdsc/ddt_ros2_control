@@ -111,16 +111,15 @@ def launch_setup(context, *args, **kwargs):
         },
     ).toxml()
 
-    # Resolve mesh URIs for the description packages available in this workspace.
-    for desc_pkg in ["d1_description", "d1h_description", "tita_description", "titatit_description"]:
-        try:
-            desc_share = get_package_share_directory(desc_pkg)
-        except Exception:
-            continue
-        robot_description = robot_description.replace(
-            "package://" + desc_pkg,
-            "file://" + desc_share,
-        )
+    # Replace package:// URIs for all *_description packages
+    description_packages = ["d1_description", "d1h_description", "tita_description", "titatit_description"]
+    for desc_pkg in description_packages:
+        package_uri = "package://" + desc_pkg
+        if package_uri in robot_description:
+            robot_description = robot_description.replace(
+                package_uri,
+                "file://" + get_package_share_directory(desc_pkg),
+            )
 
     robot_description = robot_description.replace(
         get_package_share_directory("gazebo_bridge")+ "/config/controllers.yaml",
