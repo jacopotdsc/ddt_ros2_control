@@ -63,6 +63,7 @@ private:
     bool active = false;
     int64_t generation = -1, stamp = 0;
     double height = 0.;
+    int phase = 0;  // weight phase index (config_tita.weight_phases), from the MPC node
     std::vector<double> U;
     Clock::time_point received{};
   };
@@ -91,6 +92,7 @@ private:
     // Size checked by the worker against the solver horizon x nu.
     trajectory_.stamp = int64_t(m.data[0]) * 1000000000LL + int64_t(m.data[1]);
     trajectory_.height = m.data[3];
+    trajectory_.phase = int(m.data[5]);
     trajectory_.U.assign(m.data.begin() + kTrajectoryHeader, m.data.end());
     cv_.notify_all();
   }
@@ -169,6 +171,7 @@ private:
         Clock::time_point received;
         int64_t stamp, plan_stamp, plan_generation;
         double height;
+        int phase;
         bool reset = false;
         {
           py::gil_scoped_release release;
@@ -194,6 +197,7 @@ private:
           // plan arrives. The WBC still recomputes on this cycle's measured state.
           std::copy_n(trajectory_.U.begin(), nu_, u.begin());
           height = trajectory_.height;
+          phase = trajectory_.phase;
           if (plan_generation != generation) {
             generation = plan_generation;
             next_due = 0;
@@ -216,7 +220,7 @@ private:
           solver_.attr("prepare_wbc")(mpx::readonly_buffer(qpos),
                                       mpx::readonly_buffer(qvel), reset);
           auto out =
-              mpx::array_values(solver_.attr("wbc")(mpx::readonly_buffer(u), height));
+              mpx::array_values(solver_.attr("wbc")(mpx::readonly_buffer(u), height, phase));
           if (out.size() != nj + layout.nv)
             throw std::runtime_error("Invalid WBC output size");
           // Joint targets one WBC period ahead, for the low-level PD.

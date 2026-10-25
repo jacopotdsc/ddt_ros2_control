@@ -7,6 +7,7 @@ a native C++ rewrite of the MPC/WBC optimizer. Independent of the Python node
 """
 import gc
 import os
+from functools import partial
 import sys
 from pathlib import Path
 
@@ -82,14 +83,17 @@ class Solver:
         self.theta_wbc = np.asarray(0., dtype=np.float64)
         self.com_err_integral = np.zeros(3)  # integral of the COM error, Ki term of the WBC QP
         self.base_err_integral = np.zeros(3)  # integral of the base roll/pitch error, Ki_base term
-        self.vel_integral = 0.  # integral of the forward velocity error [m], outer loop of the MPC
-        self.vel_profile = np.zeros(2)  # expected response to the command: [velocity, acceleration]
         self._wbc_template = self.mpc.init_state()
+        # Phases (config.weight_phases; the C++ nodes pass the phase index): MPC weight matrix and
+        # WBC entry ("weights" plus the integral parameters) of each.
+        self.phases = tuple(self.config.weight_phases)
+        self._mpc_weights = [self.mpc.weight_matrix(self.config.W_mpc[p]["weights"]) for p in self.phases]
+        self.wbc_phases = [self.config.W_wbc[p] for p in self.phases]
+        # Phase weights are runtime inputs of the jitted MPC and WBC: one compilation each for
+        # every phase.
         self._plan_jit = jax.jit(self.plan_controller)
-        # MPC weights: W normally, W_takeover while standing up from transform_up.
-        self.W = jnp.asarray(self.config.W)
-        self.W_takeover = jnp.asarray(self.config.W_takeover)
         self._wbc_jit = jax.jit(self.wbc_controller)
+        self._wbc_weights = [jax.tree.map(jnp.asarray, self.config.W_wbc[p]["weights"]) for p in self.phases]
         self.horizon = int(self.config.N)
         self.nu = int(self.config.nu)
         self.dt_mpc_ns = int(round(self.config.dt_mpc * 1e9))
@@ -125,8 +129,6 @@ class Solver:
             self.mpc_state = self.mpc.init_state()
             _, x0, _ = self.mpc.process_state(*self.raw, self.theta_prev)
             self.mpc_state = self.mpc.init_state(x0)
-            self.vel_integral = 0.
-            self.vel_profile = np.array([float(np.ravel(x0)[11]), 0.])  # starts from the measured velocity
         nominal = (abs(qpos[2] - self.config.robot_height) < .05 and
                    np.max(np.abs(qpos[7:] - np.asarray(self.config.q0))) < .05)
         return np.concatenate((self.raw[0], self.raw[1], self.raw[2].ravel(),
@@ -147,8 +149,7 @@ class Solver:
         x0 = x0[None, :]
         x_ref, u_ref, rates = mpc._ref_gen(x0, command, mpc_state.ref_rate)
         reference = jnp.concatenate([x_ref, u_ref], axis=-1)
-        W = jnp.tile(W, (mpc.n_env, 1, 1))
-        X, U, D = mpc._solve(reference, None, W, x0, mpc_state.X0_shifted, mpc_state.U0_shifted)
+        X, U, D = mpc.solve(reference, None, x0, mpc_state.X0_shifted, mpc_state.U0_shifted, W=W)
         D = jnp.nan_to_num(D, nan=0.0, posinf=0.0, neginf=0.0)
         shifted = mpc.shift_warm_start
         new_state = MPCState(
@@ -159,7 +160,11 @@ class Solver:
         ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(U))
         return new_state, theta_prev, U[0], ok
 
-    def wbc_controller(self, template, theta_prev, raw, qpos, qvel, u, height, com_err_integral, base_err_integral):
+    def phase_index(self, name):
+        """Index of a weight phase in config.weight_phases (what the C++ nodes exchange)."""
+        return self.phases.index(name)
+
+    def wbc_controller(self, template, theta_prev, raw, qpos, qvel, u, height, com_err_integral, base_err_integral, ww):
         """WBC on measured state, using the held first input from the latest MPC plan."""
         tita_state, x0, theta_prev = self.mpc.process_state(*raw, theta_prev)
         state = template.replace(sol=ControlSol(
@@ -171,6 +176,7 @@ class Solver:
             com_height_target=height,
             com_err_integral=com_err_integral[None, :],
             base_err_integral=base_err_integral[None, :],
+            ww=ww,
         )
         flags = jnp.array([
             jnp.all(jnp.isfinite(desired)), jnp.all(jnp.isfinite(qddot)),
@@ -192,7 +198,7 @@ class Solver:
         _, raw, command = self._nominal_raw()
         state, theta = self.mpc.init_state(), np.asarray(0., dtype=np.float64)
         for _ in range(3):
-            state, theta, U, ok = self._plan_jit(state, theta, raw, command, self.W)
+            state, theta, U, ok = self._plan_call(0)(state, theta, raw, command)
             jax.block_until_ready(state)
             if not bool(ok):
                 raise RuntimeError('MPX MPC warm-up produced an invalid trajectory')
@@ -203,11 +209,12 @@ class Solver:
         return np.asarray(U)
 
     def compile_wbc(self):
-        """JIT-compile the WBC on the nominal posture with the nominal MPC input."""
+        """JIT-compile the WBC on the nominal posture with the nominal MPC input (the gains are
+        runtime inputs: no compilation when the MPC node switches phase)."""
         data, raw, command = self._nominal_raw()
         u = np.asarray(self.config.u_ref, dtype=np.float64)
         for _ in range(3):
-            tau, qddot, _, flags = self._wbc_jit(
+            tau, qddot, _, flags = self._wbc_call(0)(
                 self._wbc_template, np.asarray(0., dtype=np.float64), raw,
                 data.qpos.copy()[None, :], data.qvel.copy()[None, :], u, command[:, 3], np.zeros(3), np.zeros(3))
             jax.block_until_ready(tau)
@@ -223,35 +230,22 @@ class Solver:
         self.compile_wbc()
         return U
 
-    def plan(self, command, standup=False):
+    def _plan_call(self, phase):
+        """Jitted MPC with the weights of a phase: (mpc_state, theta_prev, raw, command)."""
+        return partial(self._plan_jit, W=self._mpc_weights[phase])
+
+    def _wbc_call(self, phase):
+        """Jitted WBC with the gains of a phase: wbc_controller without ww."""
+        return partial(self._wbc_jit, ww=self._wbc_weights[phase])
+
+    def plan(self, command, phase=0):
         """One MPC solve on the state of the last prepare(); returns U flattened (N*nu).
 
-        standup: taking over from transform_up, use the stand-up weights W_takeover.
+        phase: index of the weight phase in config.weight_phases (W_mpc entry), 0 = "W".
         """
-        command = np.asarray(command, dtype=np.float64).copy()
-        cfg = self.config
-        if cfg.ki_vel > 0.:
-            # Outer integral loop on the forward velocity. The MPC reference restarts from the
-            # measured velocity at every solve, so a constant model mismatch (e.g. the real COM
-            # behind the model one) leaves a steady velocity error. The error is taken against
-            # the expected response to the command (the same critically damped profile, tau_v,
-            # the MPC reference follows), so normal accelerations do not wind it up. With a zero
-            # command I is the displacement since the takeover, and the MPC gets
-            # v_cmd - ki_vel * I, which stops the robot and brings it back.
-            w, x, y, z = self.data.qpos[3:7]
-            yaw = np.arctan2(2. * (w * z + x * y), 1. - 2. * (y * y + z * z))
-            v = self.raw[1][0] * np.cos(yaw) + self.raw[1][1] * np.sin(yaw)
-            dt, tau = cfg.dt_mpc, cfg.tau_v
-            v_prof, acc = self.vel_profile
-            acc += dt * ((command[0] - v_prof) / tau ** 2 - 2. * acc / tau)
-            self.vel_profile = np.array([v_prof + acc * dt, acc])
-            limit = cfg.vel_correction_max / cfg.ki_vel
-            self.vel_integral = float(np.clip(self.vel_integral + (v - self.vel_profile[0]) * dt, -limit, limit))
-            command[0] -= cfg.ki_vel * self.vel_integral
-        state, theta, U, ok = self._plan_jit(
-            self.mpc_state, self.theta_prev, self.raw,
-            command[None, :],
-            self.W_takeover if standup else self.W)
+        command = np.asarray(command, dtype=np.float64)
+        state, theta, U, ok = self._plan_call(phase)(
+            self.mpc_state, self.theta_prev, self.raw, command[None, :])
         U = np.asarray(U)
         if not bool(ok) or U.shape != (self.horizon, self.nu):
             raise ValueError('Invalid MPC result; keeping the previous trajectory')
@@ -275,23 +269,29 @@ class Solver:
             self.com_err_integral = np.zeros(3)
             self.base_err_integral = np.zeros(3)
 
-    def wbc(self, u, height):
-        """WBC on the state of the last prepare_wbc(); returns [tau (8), qddot (nv)]."""
+    def wbc(self, u, height, phase=0):
+        """WBC on the state of the last prepare_wbc(); returns [tau (8), qddot (nv)].
+
+        phase: index of the weight phase in config.weight_phases (W_wbc entry), 0 = "W".
+        """
         u = np.asarray(u, dtype=np.float64)
         if u.shape != (self.nu,):
             raise ValueError('Invalid MPC input dimension')
         data = self.data_wbc
         cfg = self.config
+        p = self.wbc_phases[phase]
+        ww = p["weights"]
         # Integral of the COM height error for the QP's Ki term (only z: the horizontal
-        # COM target comes from the MPC). No wind-up during large transients.
+        # COM target comes from the MPC). No wind-up during large transients, nor while
+        # the phase has no COM integral (it then starts from zero in the next phase).
         error = height - data.subtree_com[self.base_id, 2]
-        if abs(error) < cfg.com_integral_band:
+        if float(ww['Ki_com'][2]) > 0. and abs(error) < p["com_integral_band"]:
             self.com_err_integral[2] = np.clip(self.com_err_integral[2] + error * cfg.dt_wbc,
-                                               -cfg.com_integral_max, cfg.com_integral_max)
+                                               -p["com_integral_max"], p["com_integral_max"])
         # Integral of the base roll/pitch error for the QP's Ki_base term: same angle-axis error
         # as the QP (mpc_utils err_rotation), with the target = the base levelled at its own yaw,
         # so the yaw component is ~0 (heading is the MPC's job).
-        if cfg.Ki_base > 0.:
+        if float(ww['Ki_base']) > 0.:
             Rb = data.xmat[self.base_id].reshape(3, 3)
             yaw = np.arctan2(Rb[1, 0], Rb[0, 0])
             Ra = np.array([[np.cos(yaw), -np.sin(yaw), 0.], [np.sin(yaw), np.cos(yaw), 0.], [0., 0., 1.]])
@@ -301,10 +301,10 @@ class Solver:
             n = np.linalg.norm(axis)
             err = angle * (Ra @ (axis / n)) if angle > 1e-7 and n > 1e-7 else np.zeros(3)
             err[2] = 0.
-            if np.linalg.norm(err) < cfg.base_integral_band:
+            if np.linalg.norm(err) < p["base_integral_band"]:
                 self.base_err_integral = np.clip(self.base_err_integral + err * cfg.dt_wbc,
-                                                 -cfg.base_integral_max, cfg.base_integral_max)
-        tau, qddot, theta, flags = self._wbc_jit(
+                                                 -p["base_integral_max"], p["base_integral_max"])
+        tau, qddot, theta, flags = self._wbc_call(phase)(
             self._wbc_template, self.theta_wbc, self.raw_wbc,
             data.qpos.copy()[None, :], data.qvel.copy()[None, :], u,
             np.asarray([height], dtype=np.float64), self.com_err_integral.copy(), self.base_err_integral.copy())

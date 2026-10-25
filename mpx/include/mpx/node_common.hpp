@@ -219,9 +219,10 @@ struct StateLayout {
 //   data[2]     activation generation (changes on every activation / reset)
 //   data[3]     COM height reference (ramped) for the WBC
 //   data[4]     1 = active, 0 = standby (the WBC stops publishing at once)
-//   data[5..]   U, horizon x nu row-major; WBC currently holds the first row U[0]
-// layout.dim: {"header", 5}, {"horizon", N, N*nu}, {"input", nu, nu}; data_offset 0.
-constexpr size_t kTrajectoryHeader = 5;
+//   data[5]     weight phase: index in config_tita.weight_phases (W_mpc / W_wbc entry)
+//   data[6..]   U, horizon x nu row-major; WBC currently holds the first row U[0]
+// layout.dim: {"header", 6}, {"horizon", N, N*nu}, {"input", nu, nu}; data_offset 0.
+constexpr size_t kTrajectoryHeader = 6;
 
 // Embedded interpreter setup shared by the executables: JAX on CPU, one BLAS thread,
 // and mpx_cpp_solver.py found next to the executable.

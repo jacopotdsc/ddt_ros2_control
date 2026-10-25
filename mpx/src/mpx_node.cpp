@@ -230,7 +230,7 @@ private:
       enabled_ = enable;
       took_over_ = false;
       activating_ = enable;
-      // Taking over from transform_up: the MPC uses the stand-up weights (W_takeover)
+      // Taking over from transform_up: weight phase "W_standup" (W_mpc and W_wbc)
       // until the COM holds at h_mpc.
       standup_ = enable && fsm_ == "transform_up";
       activation_start_.reset();
@@ -295,7 +295,8 @@ private:
   // mpx/trajectory, layout in mpx/node_common.hpp (mutex_ held).
   void publish_trajectory(const builtin_interfaces::msg::Time &stamp,
                           int64_t generation, double height,
-                          const std::vector<double> &U, bool active) {
+                          const std::vector<double> &U, bool active,
+                          int phase) {
     Array msg;
     msg.layout.dim.resize(3);
     msg.layout.dim[0].label = "header";
@@ -309,14 +310,14 @@ private:
     msg.layout.dim[2].stride = nu_;
     msg.data.reserve(kTrajectoryHeader + U.size());
     msg.data = {double(stamp.sec), double(stamp.nanosec), double(generation),
-                height, active ? 1. : 0.};
+                height, active ? 1. : 0., double(phase)};
     msg.data.insert(msg.data.end(), U.begin(), U.end());
     trajectory_pub_->publish(msg);
   }
   // Tells the WBC node to stop publishing at once (mutex_ held).
   void publish_standby() {
     publish_trajectory(builtin_interfaces::msg::Time(), generation_, 0., {},
-                       false);
+                       false, 0);
   }
   void publish_estimates(const std::vector<double> &d,
                          const builtin_interfaces::msg::Time &stamp) {
@@ -384,6 +385,7 @@ private:
                               .cast<std::vector<std::pair<int, int>>>();
       layout_.nq = solver_.attr("nq").cast<size_t>();
       layout_.nv = solver_.attr("nv").cast<size_t>();
+      standup_phase_ = solver_.attr("phase_index")("W_standup").cast<int>();
       auto period = solver_.attr("period_ns").cast<int64_t>();
       {
         Lock lock(mutex_);
@@ -416,7 +418,7 @@ private:
         Clock::time_point received;
         int64_t stamp;
         std::array<double, 4> command;
-        bool standup;
+        int phase;  // weight phase index (config_tita.weight_phases)
         {
           // Release the GIL while idle and during C++ message/state handling.
           py::gil_scoped_release release;
@@ -442,7 +444,7 @@ private:
           received = feedback_->joint_time;
           stamp = feedback_->joint_stamp;
           command = command_;
-          standup = activating_ && standup_;
+          phase = activating_ && standup_ ? standup_phase_ : 0;
           if (generation != generation_) {
             generation = generation_;
             next_due = 0;
@@ -511,7 +513,7 @@ private:
           ref += std::clamp(command[3] - ref, -.1 * dt, .1 * dt);
           auto ramped = command;
           ramped[3] = ref;
-          auto trajectory = values(solver_.attr("plan")(ramped, standup));
+          auto trajectory = values(solver_.attr("plan")(ramped, phase));
           if (trajectory.size() != horizon_ * nu_)
             throw std::runtime_error("Invalid MPC trajectory size");
           if (warmup > 0) {
@@ -529,7 +531,7 @@ private:
             if (enabled_ && generation == generation_ &&
                 seconds(Clock::now() - received) < .15) {
               publish_trajectory(joints.header.stamp, generation, ref,
-                                 trajectory, true);
+                                 trajectory, true, phase);
               took_over_ = true;
             }
           }
@@ -576,7 +578,8 @@ private:
   std::atomic<bool> failed_{false};
   bool stop_ = false, controlled_ = false, enabled_ = false, compiling_ = false,
        activating_ = false, took_over_ = false;
-  bool standup_ = false;  // taking over from transform_up: stand-up MPC weights
+  bool standup_ = false;  // taking over from transform_up: weight phase "W_standup"
+  int standup_phase_ = 0;  // its index in config_tita.weight_phases (worker thread)
   bool pending_compile_ = false, estimates_ = false;
   double h_mpc_ = 0., h_rl_ = 0., height_tol_ = 0., vz_tol_ = 0.;
   int64_t settle_ns_ = 0, timeout_ns_ = 0, generation_ = 0;
