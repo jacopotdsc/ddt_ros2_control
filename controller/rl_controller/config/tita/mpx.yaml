@@ -18,9 +18,7 @@
       cmd_vel_topic: command/cmd_twist
 
     outputs:
-      effort_command_topic: mpx/effort         # applied by the rl_controller "mpc" state (Python node)
-      joint_command_topic: mpx/joint_command   # WBC tau_ff + q_des/qd_des for the "mpc" low level (C++ nodes)
-      llc_command_topic: mpx/llc_command       # tracked torque, applied by the ros2_control FSM
+      joint_command_topic: mpx/joint_command  # topic where publish message for low_level_controller
       trajectory_topic: mpx/trajectory         # MPC -> WBC (C++ nodes)
       handoff_topic: mpx/handoff
       keys_locked_topic: mpx/keys_locked

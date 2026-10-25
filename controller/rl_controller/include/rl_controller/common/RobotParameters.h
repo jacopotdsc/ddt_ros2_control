@@ -55,6 +55,12 @@ struct JointPDParameters
   std::vector<scalar_t> joint_kp, joint_kd;
 };
 
+struct MpcParameters
+{
+  std::vector<scalar_t> joint_kp, joint_kd;
+  scalar_t command_timeout{1.0};  // s without a new MPX command before folding (transform_down)
+};
+
 struct RLParameters
 {
   std::string policy_path;
@@ -102,13 +108,12 @@ struct RobotControlParameters
   // scalar_t dt;           // actual control period
   int update_rate{500};  // control loop update rate
   std::vector<scalar_t> torque_limit;
-  // s without a new MPX torque before the "mpc" state gives up and folds (transform_down).
-  scalar_t mpc_command_timeout{1.0};
 
   CarParameters car_params;
   TransformUpParameters transform_up_params;
   TransformDownParameters transform_down_params;
   JointPDParameters joint_pd_params;
+  MpcParameters mpc_params;
   std::vector<RLParameters> rl_params;
 
   std::vector<std::string> rl_policy_names;

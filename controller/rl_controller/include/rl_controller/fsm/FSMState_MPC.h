@@ -6,11 +6,7 @@ class FSMState_MPC : public FSMState
 {
 public:
   explicit FSMState_MPC(std::shared_ptr<ControlFSMData> data) : FSMState(data, "mpc") {}
-  void enter() override
-  {
-    stale_ = false;
-    entered_ = std::chrono::steady_clock::now();
-  }
+  void enter() override { stale_ = false; }
   void run() override;
   void exit() override {}
   std::string checkTransition() override;
@@ -21,7 +17,6 @@ public:
   }
 
 private:
-  bool stale_ = false;  // no MPX torque for params->mpc_command_timeout
-  std::chrono::steady_clock::time_point entered_{};
+  bool stale_ = false;  // no MPX command for params->mpc_params.command_timeout
 };
 #endif

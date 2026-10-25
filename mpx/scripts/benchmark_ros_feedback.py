@@ -16,6 +16,8 @@ import mpx_cpp_solver as backend
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--params-file', required=True)
+    parser.add_argument('--joint-rate', type=float, default=500.,
+                        help='synthetic joint_states rate, Hz (controller manager: 500)')
     args = parser.parse_args()
     cfg = yaml.safe_load(Path(args.params_file).read_text())['/**']['ros__parameters']
     inputs, outputs = cfg['inputs'], cfg['outputs']
@@ -49,7 +51,7 @@ def main():
 
     node.create_subscription(JointState, outputs['joint_command_topic'], on_wbc, fast)
     stamp_ns = node.get_clock().now().nanoseconds
-    period_ns = round(1e9 / cfg['timing']['llc_frequency'])
+    period_ns = round(1e9 / args.joint_rate)
 
     def feedback():
         nonlocal stamp_ns
@@ -58,7 +60,7 @@ def main():
         stamp = rclpy.time.Time(nanoseconds=stamp_ns).to_msg()
         joint = JointState()
         joint.header.stamp = stamp
-        joint.name = cfg['llc']['joint_names']
+        joint.name = list(backend.config.joints_name)
         joint.position = [float(v) for v in backend.config.q0]
         joint.velocity = [0.] * len(joint.name)
         joint.effort = [0.] * len(joint.name)
@@ -71,7 +73,7 @@ def main():
         base.publish(state)
         joints.publish(joint)
 
-    node.create_timer(1. / cfg['timing']['llc_frequency'], feedback)
+    node.create_timer(1. / args.joint_rate, feedback)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

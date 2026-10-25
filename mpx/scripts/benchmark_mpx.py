@@ -153,7 +153,6 @@ def main():
     parser.add_argument('--label', default=platform.node())
     parser.add_argument('--output', type=Path, help='New output directory (must not exist)')
     parser.add_argument('--namespace', default=os.environ.get('ROBOT_NS', ''))
-    parser.add_argument('--effort-topic', help='Override configured torque topic')
     parser.add_argument('--fsm-topic', help='Override configured FSM topic')
     parser.add_argument('--rosout-topic', default='/rosout')
     parser.add_argument('--logger-name', help='Exact MPX logger name; default namespace.controller')
@@ -162,7 +161,6 @@ def main():
                         help='Topic configuration; default rl_controller/config/tita/mpx.yaml')
     parser.add_argument('--mpc-topic', help='Override MPC trajectory topic')
     parser.add_argument('--wbc-topic', help='Override WBC joint-command topic')
-    parser.add_argument('--llc-topic', help='Override LLC torque topic')
     parser.add_argument('--pid', type=int, help='Local MPX PID; otherwise discover a unique process')
     parser.add_argument('--expected-hz', type=float, default=100,
                         help='Wall-clock torque rate for gap comparison (default 100)')
@@ -176,7 +174,8 @@ def main():
     from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
     from rclpy.executors import ExternalShutdownException
     from rcl_interfaces.msg import Log
-    from std_msgs.msg import Float64MultiArray, String
+    from sensor_msgs.msg import JointState
+    from std_msgs.msg import String
     from ament_index_python.packages import get_package_share_directory
     import yaml
 
@@ -197,10 +196,8 @@ def main():
         config_path = controller_share / 'config/tita/mpx.yaml'
     config_overlay = parameter_block(yaml.safe_load(config_path.read_text()))
     config = merge_dicts(base_config, config_overlay)
-    effort_topic = topic_name(args.namespace, args.effort_topic or config['outputs']['effort_command_topic'])
     mpc_topic = topic_name(args.namespace, args.mpc_topic or config['outputs']['trajectory_topic'])
     wbc_topic = topic_name(args.namespace, args.wbc_topic or config['outputs']['joint_command_topic'])
-    llc_topic = topic_name(args.namespace, args.llc_topic or config['outputs']['llc_command_topic'])
     fsm_topic = topic_name(args.namespace, args.fsm_topic or config['inputs']['fsm_state_topic'])
     logger = args.logger_name or 'controller'
     wbc_logger = args.wbc_logger_name or 'wbc'
@@ -214,8 +211,7 @@ def main():
         writer = csv.writer(stream)
         writer.writerow(columns)
         return writer
-    torques = csv_file('torques.csv', ['elapsed_s', 'fsm', 'segment', 'interval_ms', 'valid', 'effort_json'])
-    llc_commands = csv_file('llc_commands.csv', ['elapsed_s', 'fsm', 'interval_ms', 'valid', 'torque_json'])
+    torques = csv_file('torques.csv', ['elapsed_s', 'fsm', 'segment', 'interval_ms', 'valid', 'tau_ff_json'])
     windows_csv = csv_file('solver_windows.csv', ['elapsed_s', 'fsm', 'component', 'hz_state_clock', 'median_ms', 'p95_ms', 'max_ms', 'trajectory_age_median_ms', 'trajectory_age_max_ms', 'missed', 'invalid'])
     cpu_csv = csv_file('resources.csv', ['elapsed_s', 'phase', 'pid', 'cpu_percent', 'rss_mib', 'observer_cpu_percent'])
     logs = (output / 'mpx_logs.jsonl').open('w')
@@ -225,8 +221,8 @@ def main():
                     cpu_count=os.cpu_count(), ros_distro=os.environ.get('ROS_DISTRO'),
                     ros_domain_id=os.environ.get('ROS_DOMAIN_ID', '0'),
                     rmw_implementation=os.environ.get('RMW_IMPLEMENTATION', 'default'),
-                    namespace=args.namespace, effort_topic=effort_topic, mpc_topic=mpc_topic,
-                    wbc_topic=wbc_topic, llc_topic=llc_topic, fsm_topic=fsm_topic,
+                    namespace=args.namespace, mpc_topic=mpc_topic,
+                    wbc_topic=wbc_topic, fsm_topic=fsm_topic,
                     mpc_logger=logger, wbc_logger=wbc_logger,
                     duration_s=args.duration, expected_hz=args.expected_hz,
                     params_file=str(config_path), pid=None)
@@ -246,9 +242,6 @@ def main():
             self.wbc_windows = []
             self.compilations = []
             self.wbc_compilations = []
-            self.llc_count = self.llc_bad = 0
-            self.llc_previous = None
-            self.llc_intervals = []
             self.compiling = False
             self.cpu = []
             self.pid = args.pid
@@ -259,8 +252,8 @@ def main():
             qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.BEST_EFFORT)
             state_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                                    durability=DurabilityPolicy.TRANSIENT_LOCAL)
-            self.create_subscription(Float64MultiArray, effort_topic, self.torque, qos)
-            self.create_subscription(Float64MultiArray, llc_topic, self.llc, qos)
+            # MPX output (WBC of the C++ or Python backend): tau_ff, q_des, qd_des.
+            self.create_subscription(JointState, wbc_topic, self.torque, qos)
             self.create_subscription(String, fsm_topic, self.fsm, state_qos)
             self.create_subscription(Log, args.rosout_topic, self.log, qos)
             self.create_timer(1., self.resources)
@@ -276,34 +269,16 @@ def main():
             if interval is not None:
                 self.intervals.append(interval)
             self.previous = self.last = now
-            valid = len(msg.data) == 8 and all(math.isfinite(v) for v in msg.data)
+            valid = len(msg.effort) == 8 and all(math.isfinite(v) for v in msg.effort)
             self.count += 1
             self.bad += not valid
             torques.writerow([now - started, self.state, self.segment, interval, int(valid),
-                              json.dumps(list(msg.data))])
-
-        def llc(self, msg):
-            if self.state != 'mpc':
-                return
-            now = time.monotonic()
-            if self.measurement_start is None:
-                self.measurement_start = now
-                print(f'Primo comando LLC ricevuto: misuro per {args.duration:g} s.', flush=True)
-            interval = None if self.llc_previous is None else (now - self.llc_previous) * 1000
-            if interval is not None:
-                self.llc_intervals.append(interval)
-            self.llc_previous = now
-            valid = len(msg.data) == 8 and all(math.isfinite(v) for v in msg.data)
-            self.llc_count += 1
-            self.llc_bad += not valid
-            llc_commands.writerow([now - started, self.state, interval, int(valid),
-                                   json.dumps(list(msg.data))])
+                              json.dumps(list(msg.effort))])
 
         def fsm(self, msg):
             if msg.data != self.state:
                 self.segment += 1
                 self.previous = None  # Never compare separate control activations.
-                self.llc_previous = None
                 self.state = msg.data
 
         def log(self, msg):
@@ -392,9 +367,9 @@ def main():
             self.cpu.append(row)
             cpu_csv.writerow(row.values())
             previous_time, previous_count, previous_intervals = self.live_previous
-            command_count = self.count + self.llc_count
+            command_count = self.count
             hz = (command_count - previous_count) / (now - previous_time)
-            received_intervals = self.llc_intervals if self.llc_count else self.intervals
+            received_intervals = self.intervals
             intervals = stats(received_intervals[previous_intervals:])
             interval_text = (
                 f"{intervals['median']:.2f}/{intervals['p95']:.2f}/{intervals['max']:.2f} ms"
@@ -415,7 +390,7 @@ def main():
     rclpy.init(args=[])
     node = Observer()
     reason = 'duration_complete'
-    print(f'Osservo LLC {llc_topic}, effort legacy {effort_topic}, '
+    print(f'Osservo comandi WBC {wbc_topic}, '
           f'log MPC={logger}/WBC={wbc_logger}. Attendo MPC attivo.\n'
           f'Report: {output.resolve()}', flush=True)
     try:
@@ -443,13 +418,13 @@ def main():
     mpc_summary = summarize_windows(node.mpc_windows)
     wbc_summary = summarize_windows(node.wbc_windows)
     warnings = []
-    if not node.count and not node.llc_count:
-        warnings.append('Nessun comando torque ricevuto: verificare FSM, namespace e topic LLC/effort.')
+    if not node.count:
+        warnings.append('Nessun comando torque ricevuto: verificare FSM, namespace e topic joint_command.')
     if not steady and not node.mpc_windows and not node.wbc_windows:
         warnings.append('Finestre solver insufficienti: nessuna statistica stabile disponibile.')
-    if node.llc_count and not node.mpc_windows:
+    if node.count and not node.mpc_windows:
         warnings.append('Nessuna finestra MPC: controllare --logger-name e /rosout.')
-    if node.llc_count and not node.wbc_windows:
+    if node.count and not node.wbc_windows:
         warnings.append('Nessuna finestra WBC: controllare --wbc-logger-name e /rosout.')
     if not any(row['cpu_percent'] is not None for row in node.cpu):
         warnings.append('CPU MPX non disponibile: eseguire sul computer di MPX e/o specificare --pid.')
@@ -461,10 +436,6 @@ def main():
     span = node.last - node.first if node.count > 1 else 0
     report = dict(
         metadata=metadata, observation_s=ended-started, messages=node.count,
-        llc_messages=node.llc_count, invalid_llc_messages=node.llc_bad,
-        llc_received_hz=(len(node.llc_intervals) / sum(node.llc_intervals) * 1000
-                         if node.llc_intervals and sum(node.llc_intervals) > 0 else None),
-        llc_intervals_ms=stats(node.llc_intervals),
         mpc=mpc_summary, wbc=wbc_summary,
         invalid_torque_messages=node.bad,
         torque_hz_over_first_last_span=(node.count-1)/span if span else None,
@@ -492,7 +463,6 @@ def main():
     def fmt(value):
         return 'n/d' if value is None else f'{value:.3f}'
     interval = report['torque_intervals_ms'] or {}
-    llc_interval = report['llc_intervals_ms'] or {}
     lines = [f'Benchmark MPX: {args.label}', f'Esito raccolta: {reason}',
              f'Coppie ricevute: {node.count}; messaggi invalidi: {node.bad}',
              f"Frequenza ricezione, prima-ultima coppia: {fmt(report['torque_hz_over_first_last_span'])} Hz",
@@ -502,9 +472,6 @@ def main():
              f"Frequenza solver sul clock dello stato: {fmt(report['solver_mean_window_hz_state_clock'])} Hz",
              f"Finestre solver: {len(windows)} ricevute, {len(steady)} usate (prima esclusa)",
              f"Periodi saltati / solve invalidi nei log: {report['missed_periods_reported']} / {report['invalid_solves_reported']}",
-             f"LLC ricevuto: {node.llc_count} messaggi, {fmt(report['llc_received_hz'])} Hz; "
-             f"intervallo med/p95/max {fmt(llc_interval.get('median'))}/"
-             f"{fmt(llc_interval.get('p95'))}/{fmt(llc_interval.get('max'))} ms",
              f"MPC indipendente: {mpc_summary['hz_state_clock']} Hz sim; "
              f"calcolo med/p95/max {fmt(mpc_summary['median_ms'])}/"
              f"{fmt(mpc_summary['p95_ms'])}/{fmt(mpc_summary['max_ms'])} ms; "
@@ -532,7 +499,7 @@ def main():
     (output / 'report.txt').write_text(rendered)
     print(rendered)
     print(f'File salvati in {output.resolve()}')
-    return 2 if not node.count and not node.llc_count else 0
+    return 2 if not node.count else 0
 
 
 if __name__ == '__main__':

@@ -18,13 +18,14 @@ find_package(std_srvs REQUIRED)
 find_package(ros_utils REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
+find_package(urdf REQUIRED)
 
 add_executable(state_estimator_node src/state_estimator_node.cpp)
 target_include_directories(state_estimator_node PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(state_estimator_node pinocchio::pinocchio Eigen3::Eigen)
-ament_target_dependencies(state_estimator_node rclcpp nav_msgs sensor_msgs std_msgs std_srvs ros_utils)
+ament_target_dependencies(state_estimator_node rclcpp nav_msgs sensor_msgs std_msgs std_srvs ros_utils urdf)
 
 install(TARGETS state_estimator_node DESTINATION lib/${PROJECT_NAME})
 

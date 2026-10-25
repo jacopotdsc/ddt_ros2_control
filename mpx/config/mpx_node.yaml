@@ -12,17 +12,13 @@
       publish_estimate: true          # believed state on /mpx/estimate/* (Rerun logger)
 
     # C++ path: MPC publishes the plan; WBC holds U[0] and recomputes on fresh feedback
-    # publishes tau_ff/q_des/qd_des; LLC tracks the latest WBC command at joint rate.
+    # publishes tau_ff/q_des/qd_des; rl_controller (FSMState_MPC) tracks them with a joint PD.
     timing:
       mpc_frequency: 40.0        # Hz; dt_mpc=25 ms, warm start shifts one whole node
       wbc_frequency: 100.0       # Hz; reuses the latest U[0] between 40 Hz MPC plans
-      llc_frequency: 500.0       # Hz, limited by joint_states (controller manager: 500 Hz)
       # Wall-clock seconds since MPC's last active trajectory; expiry makes WBC
       # stop computing/publishing commands. It does not itself change the FSM mode.
       trajectory_timeout: 0.1
-      # Seconds (joint_states clock) since the last WBC command; expiry makes the LLC stop
-      # publishing, and rl_controller then folds after its mpc_command_timeout.
-      wbc_command_timeout: 1.0
 
     inputs:
       robot_description_topic: /tita/robot_description
@@ -49,10 +45,9 @@
       com_height_topic: /mpx/com_height        # std_msgs/Float64, COM height command
 
     outputs:
-      effort_command_topic: /tita/effort_controller/commands  # Float64MultiArray, 8 joints (Python node)
-      # sensor_msgs/JointState: effort = tau_ff, position = q_des, velocity = qd_des (C++ node)
+      # sensor_msgs/JointState: effort = tau_ff, position = q_des, velocity = qd_des
+      # (published by mpx_wbc_node, or by mpx_node_python.py with the Python backend)
       joint_command_topic: /mpx/joint_command
-      llc_command_topic: /mpx/llc_command      # LLC tracked torque to rl_controller
       # std_msgs/Float64MultiArray, MPC -> WBC trajectory (layout in include/mpx/node_common.hpp)
       trajectory_topic: /mpx/trajectory
       # Bool, true while velocity/height commands are ignored (keyboard lock):
@@ -61,14 +56,6 @@
       handoff_topic: mpx/handoff         # String, RL mode MPX has handed control to
       # Believed state (com, com_vel, base_rpy, left/right_wheel) when behavior.publish_estimate.
       estimate_topic_prefix: /mpx/estimate
-
-    # LLC PD gains for the eight TITA joints. Wheels use velocity damping only.
-    llc:
-      joint_names: [joint_left_leg_1, joint_left_leg_2, joint_left_leg_3, joint_left_leg_4,
-                    joint_right_leg_1, joint_right_leg_2, joint_right_leg_3, joint_right_leg_4]
-      joint_kp: [20.0, 20.0, 20.0, 0.0, 20.0, 20.0, 20.0, 0.0]
-      joint_kd: [1.0, 1.0, 1.0, 0.3, 1.0, 1.0, 1.0, 0.3]
-      max_torque: [60.0, 60.0, 60.0, 20.0, 60.0, 60.0, 60.0, 20.0]
 
     # On an "rl_N" or "transform_down" request MPX zeroes velocity, drives the COM to h_rl
     # and releases control once it holds there (or after the timeout).

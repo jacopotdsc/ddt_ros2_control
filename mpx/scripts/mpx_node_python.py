@@ -36,7 +36,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.signals import SignalHandlerOptions
 from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, Float64, Float64MultiArray, String
+from std_msgs.msg import Bool, Float64, String
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from mpx.utils.ros_model import model_from_description
 
@@ -156,8 +156,9 @@ class EstimatePublisher:
 class MPXNode(Node):
     def __init__(self):
         # Parameters come from config/mpx_node.yaml; there are no defaults in code.
+        # Like the C++ nodes: the namespace comes from the launch (relative topics of tita/mpx.yaml).
         super().__init__(
-            "controller", namespace="mpx",
+            "controller",
             automatically_declare_parameters_from_overrides=True,
         )
 
@@ -301,8 +302,10 @@ class MPXNode(Node):
                 PoseStamped, self.get_parameter("inputs.pose_command_topic").value,
                 self.on_pose_command, 1,
             )
-        self.effort_pub = self.create_publisher(
-            Float64MultiArray, self.get_parameter("outputs.effort_command_topic").value, 1,
+        # Same output as mpx_wbc_node: rl_controller (FSMState_MPC) adds the joint PD.
+        self.joint_command_pub = self.create_publisher(
+            JointState, self.get_parameter("outputs.joint_command_topic").value,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
         self.keys_locked_pub = self.create_publisher(
             Bool, self.get_parameter("outputs.keys_locked_topic").value,
@@ -332,7 +335,7 @@ class MPXNode(Node):
         status = "MPX standby" if self._mode_controlled else "MPX ready on CPU"
         self.get_logger().info(
             f"{status}: MPC + WBC {self.config.mpc_frequency} Hz in simulation time; "
-            "ros2_control holds the latest effort at 500 Hz."
+            "rl_controller tracks the latest joint command at 500 Hz."
         )
 
     def wait_for_description(self):
@@ -655,8 +658,8 @@ class MPXNode(Node):
         external_publishers = [
             endpoint for endpoint in publishers
             if not (
-                endpoint.node_name == "controller"
-                and endpoint.node_namespace.rstrip("/") == "/mpx"
+                endpoint.node_name == self.get_name()
+                and endpoint.node_namespace == self.get_namespace()
             )
         ]
         if external_publishers:
@@ -664,7 +667,7 @@ class MPXNode(Node):
             self.destroy_timer(self.default_command_timer)
             self.destroy_publisher(self.default_command_pub)
             self.get_logger().info(
-                "External /mpx/cmd_vel publisher detected; stopped publishing default zero commands."
+                f"External {self.cmd_vel_topic} publisher detected; stopped publishing default zero commands."
             )
             return
 
@@ -780,7 +783,7 @@ class MPXNode(Node):
             mpc_ok, jnp.all(jnp.isfinite(desired)), jnp.all(jnp.isfinite(qddot)),
             jnp.all(jnp.isfinite(fl)) & jnp.all(jnp.isfinite(fr)),
         ])
-        return mpc_state, theta_prev, tau_wbc, flags
+        return mpc_state, theta_prev, tau_wbc, qddot, flags
 
     def precompile_controller(self):
         self.get_logger().info("Compiling MPX on CPU; the previous control remains active until valid MPC output."
@@ -794,7 +797,7 @@ class MPXNode(Node):
         mpc_state, theta_prev = self.mpc_state, self.theta_prev
         start = time.perf_counter()
         for i in range(3):
-            mpc_state, theta_prev, tau_wbc, flags = self._step_controller_jit(
+            mpc_state, theta_prev, tau_wbc, _, flags = self._step_controller_jit(
                 mpc_state, theta_prev, self.raw_state_from(data),
                 data.qpos.copy()[None, :], data.qvel.copy()[None, :],
                 np.asarray([self._command], dtype=np.float64),
@@ -814,16 +817,27 @@ class MPXNode(Node):
             "warm-up state discarded."
         )
 
-    def publish_effort_command(self, effort):
+    def publish_joint_command(self, stamp, effort, qpos, qvel, qddot=None):
+        """tau_ff and joint targets one control period ahead, as mpx_wbc_node does.
+
+        qddot (nv) is the WBC acceleration; None holds the measured joint state."""
         effort = np.asarray(effort, dtype=float)
         if effort.shape != (8,) or not np.all(np.isfinite(effort)):
             raise ValueError(f"Refusing to publish invalid torque: {effort}")
         effort = np.clip(
             effort, -self.config.effort_limits, self.config.effort_limits
         )
-        msg = Float64MultiArray()
-        msg.data = effort.tolist()
-        self.effort_pub.publish(msg)
+        dt = self.period_ns / 1e9
+        msg = JointState()
+        msg.header.stamp = stamp
+        msg.name = list(self.config.joints_name)
+        for (qpos_addr, qvel_addr), tau in zip(self.joint_addresses, effort):
+            q, qd = float(qpos[qpos_addr]), float(qvel[qvel_addr])
+            qdd = 0.0 if qddot is None else float(qddot[qvel_addr])
+            msg.position.append(q + qd * dt + 0.5 * qdd * dt * dt)
+            msg.velocity.append(qd + qdd * dt)
+            msg.effort.append(float(tau))
+        self.joint_command_pub.publish(msg)
 
     def control_loop(self):
         """One serial solve per 10 ms of JointState time; skip missed periods.
@@ -937,7 +951,8 @@ class MPXNode(Node):
                         and np.max(np.abs(self.data.qpos[7:] - np.asarray(self.config.q0))) < 0.05
                     )
                     if self.initial_effort is not None and nominal and not self._mode_controlled:
-                        self.publish_effort_command(self.initial_effort)
+                        self.publish_joint_command(joint[0].header.stamp, self.initial_effort,
+                                                   self.data.qpos, self.data.qvel)
                     self.get_logger().info(
                         "First feedback received; starting simulation-time control"
                         + (f" ({warmup_left} warm-up solves before the first torque)."
@@ -946,15 +961,17 @@ class MPXNode(Node):
                 prev_stamp = stamp
                 max_delta = HEIGHT_RAMP_RATE * dt
                 height_ref += float(np.clip(command[3] - height_ref, -max_delta, max_delta))
-                qpos = self.data.qpos.copy()  # same copy the solver receives
-                mpc_state, theta_prev, tau_wbc, flags = self._step_controller_jit(
+                qpos = self.data.qpos.copy()  # same copies the solver receives
+                qvel = self.data.qvel.copy()
+                mpc_state, theta_prev, tau_wbc, qddot, flags = self._step_controller_jit(
                     self.mpc_state, self.theta_prev, raw,
-                    qpos[None, :], self.data.qvel.copy()[None, :],
+                    qpos[None, :], qvel[None, :],
                     np.asarray([(*command[:3], height_ref)], dtype=np.float64),
                 )
                 # NumPy materialization waits for actual CPU completion; these
                 # timings include the solve, not merely asynchronous dispatch.
                 effort = np.asarray(tau_wbc[0])
+                qddot = np.asarray(qddot[0])
                 flags = np.asarray(flags)
                 if not np.all(np.isfinite(effort)) or not np.all(flags):
                     if not self._reported_nan_diagnostics:
@@ -975,7 +992,7 @@ class MPXNode(Node):
                     # Never publish a result from an old activation or stale feedback.
                     if (self._mode_enabled and generation == self._generation
                             and time.monotonic() - joint[1] < 0.15):
-                        self.publish_effort_command(effort)
+                        self.publish_joint_command(joint[0].header.stamp, effort, qpos, qvel, qddot)
                         self._took_over = True
             except Exception as exc:
                 invalid += 1

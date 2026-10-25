@@ -192,8 +192,8 @@ def launch_setup(context, *args, **kwargs):
             namespace=ns, parameters=[{"timeout": command_timeout}],
         ))
 
-    # MPX is not started here, as on the robot: run mpx_node_cpp, mpx_wbc_node and
-    # mpx_llc_node by hand (base from the filter; ground truth with
+    # MPX is not started here, as on the robot: run mpx_node_cpp and mpx_wbc_node
+    # by hand (base from the filter; ground truth with
     # --ros-args -p inputs.base_state_source:=ground_truth on MPC and WBC).
     return nodes
 

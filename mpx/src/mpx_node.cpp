@@ -1,8 +1,8 @@
 // MPX MPC node (rclcpp front end; the MPC is the JAX function of MPX). It owns the
 // feedback, the modes, the height ramp and the handoff, solves the MPC on the
 // joint_states timestamps and publishes the whole input trajectory on mpx/trajectory.
-// mpx_wbc_node and mpx_llc_node (separate processes) consume the plan's first input
-// before rl_controller writes the final torque to hardware.
+// mpx_wbc_node (separate process) consumes the plan's first input and publishes
+// tau_ff/q_des/qd_des; rl_controller (FSMState_MPC) adds the joint PD and writes the torque.
 #include "mpx/node_common.hpp"
 #include "mpx/python_buffers.hpp"
 #include <atomic>

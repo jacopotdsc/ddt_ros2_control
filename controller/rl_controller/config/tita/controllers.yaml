@@ -48,9 +48,6 @@
       
       # control parameters
       torque_limit: [60.0, 60.0, 60.0, 20.0, 60.0, 60.0, 60.0, 20.0]
-      # s without a new MPX torque (LLC/WBC/MPC stopped or dead): the "mpc" state stops
-      # applying the last torque and folds the robot (transform_down).
-      mpc_command_timeout: 1.0
       wheel_indices: [3, 7]
       hip_indices: [0, 4]
 
@@ -63,8 +60,8 @@
         stand_timer: 2.0
         # 
         ff_torque: [-20.0, 0.0, -25.0, 0.0, 20.0, 0.0, -25.0, 0.0]
-        joint_kp: [20.0, 20.0, 20.0, 5.0, 20.0, 20.0, 20.0, 5.0]
-        joint_kd: [1.0, 1.0, 1.0, 0.5, 1.0, 1.0, 1.0, 0.5]
+        joint_kp: [600.0, 80.0, 80.0, 5.0, 600.0, 80.0, 80.0, 5.0]
+        joint_kd: [8.0, 8.0, 8.0, 0.5, 8.0, 8.0, 8.0, 0.5]
         
       transform_down:
         fold_jpos: [0.5, 1.20, -2.7, 0.0, -0.5, 1.2, -2.7, 0.0]
@@ -75,6 +72,11 @@
       joint_pd:
         joint_kp: [600.0, 80.0, 80.0, 5.0, 600.0, 80.0, 80.0, 5.0]
         joint_kd: [8.0, 8.0, 8.0, 0.2, 8.0, 8.0, 8.0, 0.2]
+      
+      mpc:
+        command_timeout: 1.0  # seconds without new MPX commands (WBC/MPC stopped) before FSMState_MPC folds the robot
+        joint_kp: [20.0, 20.0, 20.0, 0.0, 20.0, 20.0, 20.0, 0.0]
+        joint_kd: [1.0, 1.0, 1.0, 0.3, 1.0, 1.0, 1.0, 0.3]
       rl_policy_names:
         - "rl_flat"
 

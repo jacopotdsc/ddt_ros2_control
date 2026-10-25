@@ -33,9 +33,7 @@ inline const std::string robot_description = "robot_description";
 inline const std::string filtered_state = "filtered_state";  // tita_state_estimator
 
 // mpx
-inline const std::string mpx_effort = "mpx/effort";
 inline const std::string mpx_joint_command = "mpx/joint_command";  // WBC: tau_ff, q_des, qd_des
-inline const std::string mpx_llc_command = "mpx/llc_command";      // LLC tracked torque
 inline const std::string mpx_handoff = "mpx/handoff";
 inline const std::string mpx_keys_locked = "mpx/keys_locked";
 

@@ -32,12 +32,6 @@ target_link_libraries(mpx_wbc_node pybind11::embed)
 ament_target_dependencies(mpx_wbc_node rclcpp ament_index_cpp gazebo_msgs nav_msgs sensor_msgs geometry_msgs std_msgs)
 install(TARGETS mpx_wbc_node DESTINATION lib/${PROJECT_NAME})
 
-add_executable(mpx_llc_node src/mpx_llc_node.cpp)
-target_include_directories(mpx_llc_node PRIVATE include)
-target_compile_features(mpx_llc_node PRIVATE cxx_std_17)
-ament_target_dependencies(mpx_llc_node rclcpp ament_index_cpp sensor_msgs std_msgs)
-install(TARGETS mpx_llc_node DESTINATION lib/${PROJECT_NAME})
-
 add_executable(benchmark_mpx_cpp src/benchmark_mpx_cpp.cpp)
 target_include_directories(benchmark_mpx_cpp PRIVATE include)
 target_compile_features(benchmark_mpx_cpp PRIVATE cxx_std_17)

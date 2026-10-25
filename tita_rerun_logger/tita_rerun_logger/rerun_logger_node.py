@@ -38,7 +38,7 @@ from rerun.components import InterpolationMode
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, Vector3Stamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Bool, Float64MultiArray, String
+from std_msgs.msg import Bool, String
 
 from tita_rerun_logger.blueprint import (APPLICATION_ID, BALANCE, COMPARED,
                                          FSM_CODES, SOURCES, TITA_JOINTS, WHEELS,
@@ -205,7 +205,7 @@ class RerunLogger(Node):
         dp("controllers_yaml", "")
         dp("controller_name", "tita_rl_controller")
         for key in ("robot_description", "joint_states", "imu", "link_states",
-                    "filtered_state", "chassis_odometry", "mpx_effort", "mpx_handoff",
+                    "filtered_state", "chassis_odometry", "mpx_joint_command", "mpx_handoff",
                     "mpx_keys_locked", "mpx_estimate_prefix", "fsm_state", "cmd_key",
                     "cmd_twist", "cmd_pose"):
             dp(f"topics.{key}", "")
@@ -244,11 +244,10 @@ class RerunLogger(Node):
         self.series = {}             # entity path -> ([t], [value]), sent in batches
         self.points_3d = {}          # latest filter / MPX points for the 3D view
         # Recent joint_states: (DDS source timestamp [ns], stamp [s], bytes). Maps the
-        # publication time of unstamped messages (link_states, mpx/effort) to sim time.
+        # publication time of unstamped messages (link_states) to sim time.
         self.joint_hist = deque(maxlen=250)
         self.joint_msg = None        # (stamp, JointState) deserialized lazily
         self.pending_links = []      # link_states newer than the latest joint_states
-        self.last_effort_meas = {}
         self.gt_raw = deque(maxlen=max(10, int(float(gp("gt_buffer_s")) * 500)))
         self.gt_cache = OrderedDict()
         self.fsm_state = self.fsm_requested = None
@@ -296,7 +295,7 @@ class RerunLogger(Node):
                      self._stamped(Odometry, "filter", self._on_filter), raw=True)
         self._stream("chassis_odometry", Odometry,
                      self._stamped(Odometry, "odom", self._on_chassis_odom), raw=True)
-        self._stream("mpx_effort", Float64MultiArray, self._on_mpx_effort)
+        self._stream("mpx_joint_command", JointState, self._on_mpx_joint_command)
         self._stream("cmd_twist", Twist, self._on_cmd_twist)
         self._stream("cmd_pose", PoseStamped, self._on_cmd_pose)
         prefix = self.topic("mpx_estimate_prefix")
@@ -315,11 +314,11 @@ class RerunLogger(Node):
         self.create_timer(float(gp("flush_period_s")), self.flush, clock=steady)
         self.create_timer(float(gp("poll_period_s")), self._poll_streams, clock=steady)
         self.get_logger().info(
-            f"Rerun logger started; joints (mpx/effort order): {', '.join(self.joints)}")
+            f"Rerun logger started; joints: {', '.join(self.joints)}")
 
     # ------------------------------------------------------------ setup
     def _load_controller_config(self, path, controller):
-        """Joint order of mpx/effort and torque_limit from rl_controller's controllers.yaml."""
+        """Joint order and torque_limit from rl_controller's controllers.yaml."""
         if not path and get_package_share_directory is not None:
             try:
                 path = os.path.join(get_package_share_directory("rl_controller"),
@@ -425,14 +424,14 @@ class RerunLogger(Node):
             rr.log(f"joints/effort/{joint}/measured", rr.SeriesLines(
                 colors=[SOURCES["imu"][0]], names="measured (joint_states)"), static=True)
             rr.log(f"joints/effort/{joint}/mpx_cmd", rr.SeriesLines(
-                colors=[SOURCES["mpx"][0]], names="MPX command (mpx/effort)"), static=True)
+                colors=[SOURCES["mpx"][0]], names="MPX feedforward (mpx/joint_command)"), static=True)
         for path, name in (("fsm/state", "FSM state (fsm_state)"),
                            ("fsm/requested", "requested (command/cmd_key)"),
                            ("mpx/keys_locked", "MPX keys locked")):
             rr.log(path, rr.SeriesLines(names=name, interpolation_mode=InterpolationMode.StepAfter),
                    static=True)
         rr.log("mpx/rate_hz/estimate", rr.SeriesLines(names="mpx/estimate (solves)"), static=True)
-        rr.log("mpx/rate_hz/effort", rr.SeriesLines(names="mpx/effort (published torques)"),
+        rr.log("mpx/rate_hz/joint_command", rr.SeriesLines(names="mpx/joint_command (WBC commands)"),
                static=True)
         codes = ", ".join(f"{k}={v}" for k, v in FSM_CODES.items())
         rr.log("events", rr.TextLog(f"FSM codes: {codes}"), static=True)
@@ -548,7 +547,6 @@ class RerunLogger(Node):
             if i < len(msg.velocity):
                 self._scalar(f"joints/velocity/{n}", msg.velocity[i])
             if i < len(msg.effort):
-                self.last_effort_meas[n] = msg.effort[i]
                 self._scalar(f"joints/effort/{n}/measured", msg.effort[i])
                 if self.torque_limit.get(n):
                     self._scalar(f"joints/effort_ratio/{n}",
@@ -783,18 +781,15 @@ class RerunLogger(Node):
             self.points_3d[("mpx", "wheels")] = [parts["wheels/left"], parts["wheels/right"]]
             del self.mpx_parts[t]
 
-    def _on_mpx_effort(self, msg, src):
+    def _on_mpx_joint_command(self, msg, src):
+        # tau_ff only: rl_controller (FSMState_MPC) adds the joint PD to it.
         t = self._sim_time(src)
         self._set_time(t)
-        names = self.joints if len(self.joints) == len(msg.data) else \
-            [f"cmd_{i}" for i in range(len(msg.data))]
-        for n, tau in zip(names, msg.data):
+        for n, tau in zip(msg.name, msg.effort):
             self._scalar(f"joints/effort/{n}/mpx_cmd", tau)
-            if n in self.last_effort_meas:
-                self._scalar(f"joints/effort_clamp/{n}", tau - self.last_effort_meas[n])
         self.effort_times.append(t)
         if len(self.effort_times) >= 2 and self.effort_times[-1] > self.effort_times[0]:
-            self._scalar("mpx/rate_hz/effort", (len(self.effort_times) - 1)
+            self._scalar("mpx/rate_hz/joint_command", (len(self.effort_times) - 1)
                          / (self.effort_times[-1] - self.effort_times[0]))
 
     def _on_keys_locked(self, msg):

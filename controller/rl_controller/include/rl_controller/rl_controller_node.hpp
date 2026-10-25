@@ -25,7 +25,6 @@
 #include "fsm/FSM.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
-#include "std_msgs/msg/float64_multi_array.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -94,10 +93,8 @@ protected:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr posestamped_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fsm_goal_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr mpc_subscription_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr llc_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mpc_handoff_subscription_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr mpc_joint_command_subscription_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr mpc_subscription_;
   rclcpp::Time mpc_stats_start_{0, 0, RCL_ROS_TIME}, mpc_last_command_{0, 0, RCL_ROS_TIME};
   std::atomic<int64_t> last_update_ns_{0};
   // Current FSM state, published on change (MPX knows whether its torque is applied).

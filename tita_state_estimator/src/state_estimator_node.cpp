@@ -17,6 +17,7 @@
 #include <pinocchio/parsers/urdf.hpp>
 
 #include <rclcpp/rclcpp.hpp>
+#include <urdf/model.h>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -82,8 +83,23 @@ private:
     for (const char * frame : {"left_leg_4", "right_leg_4"}) {
       if (!robot_model_.existFrame(frame)) throw std::runtime_error(std::string("missing frame ") + frame);
     }
-    state_filter_ptr_ = std::make_shared<labrob::KF>(robot_model_);
-    RCLCPP_INFO(get_logger(), "Pinocchio model built (%d joints); filter ready", N_JOINTS);
+    // Wheel radius from the URDF wheel collision cylinders (left_leg_4, right_leg_4).
+    urdf::Model description;
+    if (!description.initString(urdf)) throw std::runtime_error("cannot parse robot_description");
+    double radius[2] = {0.0, 0.0};
+    int k = 0;
+    for (const char * wheel : {"left_leg_4", "right_leg_4"}) {
+      const auto link = description.getLink(wheel);
+      const auto cylinder = (link && link->collision && link->collision->geometry) ?
+        std::dynamic_pointer_cast<urdf::Cylinder>(link->collision->geometry) : nullptr;
+      if (!cylinder) throw std::runtime_error(std::string("no collision cylinder on ") + wheel);
+      radius[k++] = cylinder->radius;
+    }
+    if (std::abs(radius[0] - radius[1]) > 1e-9) throw std::runtime_error("wheel radii differ");
+    state_filter_ptr_ = std::make_shared<labrob::KF>(robot_model_, radius[0]);
+    RCLCPP_INFO(
+      get_logger(), "Pinocchio model built (%d joints), wheel radius %.4f m; filter ready",
+      N_JOINTS, radius[0]);
   }
 
   void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)

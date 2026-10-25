@@ -28,8 +28,8 @@ namespace labrob {
         static constexpr int N_JOINTS = 8;
         
         public:
-        KF(const pinocchio::Model& robot_model):
-        robot_model_(robot_model){
+        KF(const pinocchio::Model& robot_model, double wheel_radius):
+        robot_model_(robot_model), wheel_radius_(wheel_radius){
             
             robot_data_ = pinocchio::Data(robot_model_);
             right_leg4_idx_ = robot_model_.getFrameId("right_leg_4");
@@ -155,7 +155,7 @@ namespace labrob {
         pinocchio::Model robot_model_;
         pinocchio::Data robot_data_;
 
-        double wheel_radius_ = 0.0925;
+        double wheel_radius_;  // from the URDF wheel collision cylinder (was 0.0925 hard-coded)
         double g = 9.81;
 
         pinocchio::FrameIndex right_leg4_idx_;

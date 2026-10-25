@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Passively measure MPC, WBC and LLC topic rates while the FSM is in MPC."""
+"""Passively measure MPC and WBC topic rates while the FSM is in MPC."""
 
 import argparse
 import math
@@ -101,7 +101,6 @@ class RateMonitor(Node):
         self.rates = [
             Rate("MPC", topic(ns, args.mpc_topic), args.mpc_hz),
             Rate("WBC", topic(ns, args.wbc_topic), args.wbc_hz),
-            Rate("LLC", topic(ns, args.llc_topic), args.llc_hz),
         ]
         self.solve_windows = {'MPC': [], 'WBC': []}
         self.duration = args.duration
@@ -110,16 +109,13 @@ class RateMonitor(Node):
         self.started = self.segment_start
         self.last_print = self.segment_start or 0.0
         self.previous_print = self.segment_start
-        self.previous_counts = [0, 0, 0]
+        self.previous_counts = [0, 0]
         self.done = False
         self.qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.joint_count = args.joint_count
         self.create_subscription(Float64MultiArray, self.rates[0].topic,
                                  self.on_mpc, self.qos)
         self.create_subscription(JointState, self.rates[1].topic,
                                  self.on_wbc, self.qos)
-        self.create_subscription(Float64MultiArray, self.rates[2].topic,
-                                 self.on_llc, self.qos)
         if self.fsm_topic:
             reliable_latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                           durability=rclpy.qos.DurabilityPolicy.TRANSIENT_LOCAL)
@@ -179,11 +175,6 @@ class RateMonitor(Node):
                  and all(math.isfinite(x) for x in msg.position + msg.velocity + msg.effort))
         self.record(1, valid)
 
-    def on_llc(self, msg):
-        valid = (len(msg.data) == self.joint_count
-                 and all(math.isfinite(x) for x in msg.data))
-        self.record(2, valid)
-
     def on_rosout(self, msg):
         if msg.name.endswith('.controller') or msg.name == 'controller':
             component = 'MPC'
@@ -239,11 +230,9 @@ class RateMonitor(Node):
                   f"max={rate.max_ms:.2f} ms, periodi persi stimati={rate.missed}, "
                   f"messaggi incoerenti={rate.invalid} "
                   f"[{ 'OK' if ok else 'FUORI TARGET' }]")
-        mpc, wbc, llc = (rate.hz for rate in self.rates)
+        mpc, wbc = (rate.hz for rate in self.rates)
         for label, measured, expected in (("WBC/MPC", wbc / mpc if mpc else 0.0,
-                                           self.rates[1].target_hz / self.rates[0].target_hz),
-                                          ("LLC/WBC", llc / wbc if wbc else 0.0,
-                                           self.rates[2].target_hz / self.rates[1].target_hz)):
+                                           self.rates[1].target_hz / self.rates[0].target_hz),):
             ok = measured > 0 and abs(measured - expected) <= tolerance * expected
             passed &= ok
             print(f"  rapporto {label}: {measured:.2f} / atteso {expected:.2f} "
@@ -275,23 +264,19 @@ def parse_args():
                         help="tolleranza relativa sulle frequenze/rapporti (default: 0.20)")
     parser.add_argument("--max-missed-percent", type=float, default=1.0,
                         help="massima percentuale di periodi persi stimati (default: 1%)")
-    parser.add_argument("--joint-count", type=int, default=8,
-                        help="numero di giunti atteso nel comando LLC (default: 8)")
     parser.add_argument("--mpc-hz", type=float, default=50.0)
     parser.add_argument("--wbc-hz", type=float, default=100.0)
-    parser.add_argument("--llc-hz", type=float, default=500.0)
     parser.add_argument("--fsm-topic", default="fsm_state")
     parser.add_argument("--no-fsm", action="store_true",
                         help="misura subito senza filtrare sullo stato FSM")
     parser.add_argument("--mpc-topic", default="mpx/trajectory")
     parser.add_argument("--wbc-topic", default="mpx/joint_command")
-    parser.add_argument("--llc-topic", default="mpx/llc_command")
     args = parser.parse_args()
     if (args.duration <= 0 or args.startup_timeout <= 0 or not 0 < args.tolerance < 1
-            or not 0 <= args.max_missed_percent < 100 or args.joint_count <= 0):
+            or not 0 <= args.max_missed_percent < 100):
         parser.error("duration/startup-timeout devono essere >0; tolerance tra 0 e 1; "
-                     "max-missed-percent tra 0 e 100 e joint-count >0")
-    if min(args.mpc_hz, args.wbc_hz, args.llc_hz) <= 0:
+                     "max-missed-percent tra 0 e 100")
+    if min(args.mpc_hz, args.wbc_hz) <= 0:
         parser.error("le frequenze attese devono essere >0")
     return args
 

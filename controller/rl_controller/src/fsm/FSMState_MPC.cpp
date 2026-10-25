@@ -11,16 +11,15 @@ void FSMState_MPC::run()
   std::unique_lock<std::mutex> lock(_data->mpc_command.mutex, std::try_to_lock);
   if (!lock.owns_lock()) return;
   auto & mpc = _data->mpc_command;
-  // Pure Python MPX still sends torque directly; the hierarchical path waits for
-  // the independent LLC node to publish its tracked torque.
-  const bool use_llc = !mpc.q_des.empty() && !mpc.llc_effort.empty();
-  const auto & effort = use_llc ? mpc.llc_effort : mpc.effort;
+  const auto & effort = mpc.effort;
+  const auto & kp = _data->params->mpc_params.joint_kp;
+  const auto & kd = _data->params->mpc_params.joint_kd;
+  // One PD gain and one target per joint (mpx/joint_command: tau_ff, q_des, qd_des).
+  const bool sizes_ok = !effort.empty() && kp.size() == effort.size() && kd.size() == effort.size() &&
+                        mpc.q_des.size() == effort.size() && mpc.qd_des.size() == effort.size();
   // MPX stopped or dead: never hold its last torque. checkTransition folds the robot.
-  // Hierarchical path: the LLC is the last stage, so its torque must stay fresh (the
-  // LLC only publishes in "mpc": count from the entry). Python path: mpx/effort.
-  const auto last = mpc.q_des.empty() ? mpc.received : std::max(mpc.llc_received, entered_);
-  const double age = std::chrono::duration<double>(start - last).count();
-  const bool stale = effort.empty() || age > _data->params->mpc_command_timeout;
+  const double age = std::chrono::duration<double>(start - mpc.received).count();
+  const bool stale = !sizes_ok || age > _data->params->mpc_params.command_timeout;
   if (stale != stale_) {
     std::cerr << (stale ? "[FSMState_MPC] no MPX torque for " : "[FSMState_MPC] MPX torque back after ")
               << age << " s" << (stale ? ": damping, then transform_down" : "") << std::endl;
@@ -32,16 +31,19 @@ void FSMState_MPC::run()
     for (auto i : _data->params->wheel_indices) _data->low_cmd->kd(i) = 0;
     return;
   }
-  if (!mpc.valid || effort.size() != mpc.effort.size()) return;
+  if (!mpc.valid) return;
   _data->low_cmd->zero();
-  // The standalone LLC publishes the already tracked torque. The legacy Python
-  // path has no q_des and continues to use its direct torque vector.
+  // PD around the WBC feedforward on this cycle's joints (read just before run()),
+  // computed here rather than in the hardware bridge so torque_limit bounds the total.
+  const auto & q = _data->low_state->q;
+  const auto & dq = _data->low_state->dq;
   for (size_t i = 0; i < effort.size(); ++i) {
+    const double tau = effort[i] + kp[i] * (mpc.q_des[i] - q(i)) + kd[i] * (mpc.qd_des[i] - dq(i));
     const auto limit = _data->params->torque_limit[i];
-    _data->low_cmd->tau_cmd(i) = std::clamp(effort[i], -limit, limit);
+    _data->low_cmd->tau_cmd(i) = std::clamp(tau, -limit, limit);
   }
-  if (!mpc.q_des.empty() && mpc.llc_us.size() < 100000) {
-    mpc.llc_us.push_back(
+  if (mpc.run_us.size() < 100000) {
+    mpc.run_us.push_back(
       std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
   }
 }
@@ -51,7 +53,7 @@ std::string FSMState_MPC::checkTransition()
   const auto & command = _data->rc_data->fsm_name_;
   // idle and joint_pd are the safety commands: immediate, in any situation.
   if (command == "idle" || command == "joint_pd") return command;
-  // No MPX torque for mpc_command_timeout: fold now, without waiting for the MPX handoff.
+  // No MPX command for mpc.command_timeout: fold now, without waiting for the MPX handoff.
   if (stale_) return "transform_down";
   // For rl_N and transform_down MPX first lowers the robot to h_rl at rest, then
   // publishes the handed-off mode.

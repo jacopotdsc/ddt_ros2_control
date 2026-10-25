@@ -17,7 +17,7 @@
       base_link: "base_link"
       wheel_links: ["left_leg_4", "right_leg_4"]   # left, right (same order as mpx/estimate)
       wheel_radius: 0.0925
-      # Joint order of mpx/effort and torque_limit: read from rl_controller's controllers.yaml
+      # Joint order of torque_limit: read from rl_controller's controllers.yaml
       controllers_yaml: ""        # "" = share/rl_controller/config/tita/controllers.yaml
       controller_name: "tita_rl_controller"
 
@@ -32,7 +32,7 @@
         # filter
         filtered_state: filtered_state
         # MPX and FSM
-        mpx_effort: mpx/effort
+        mpx_joint_command: mpx/joint_command   # WBC tau_ff, q_des, qd_des
         mpx_handoff: mpx/handoff
         mpx_keys_locked: mpx/keys_locked
         mpx_estimate_prefix: mpx/estimate   # com, com_vel, base_rpy, left_wheel, right_wheel

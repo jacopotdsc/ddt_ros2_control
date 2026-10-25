@@ -38,17 +38,15 @@ def print_topic_summary(params):
     fsm = inputs['fsm_state_topic']
     trajectory = outputs['trajectory_topic']
     wbc = outputs['joint_command_topic']
-    llc = outputs['llc_command_topic']
     rows = [
         ('/mpx/benchmark/controller',
          [trajectory, outputs['handoff_topic'], outputs['keys_locked_topic']],
          [description, *feedback, fsm, *[inputs[key] for key in
           ('mode_command_topic', 'cmd_vel_topic', 'com_height_topic', 'pose_command_topic')]]),
         ('/mpx/benchmark/wbc', [wbc], [description, *feedback, trajectory]),
-        ('/mpx/benchmark/llc', [llc], [inputs['joint_states_topic'], wbc, fsm]),
         ('/mpx/benchmark/feedback',
          [description, *feedback, fsm, inputs['mode_command_topic']], [trajectory, wbc]),
-        ('/mpx_rate_check', [], [trajectory, wbc, llc, fsm, '/rosout']),
+        ('/mpx_rate_check', [], [trajectory, wbc, fsm, '/rosout']),
     ]
     print('Topic applicativi configurati (esclusi log e notifiche parametri ROS):', flush=True)
     for name, publishers, subscribers in rows:
@@ -64,16 +62,15 @@ def command(args, ros2, params_file, params):
     ns = '/mpx/benchmark'
     nodes = [[ros2, 'run', 'mpx', name, '--ros-args', '-r', f'__ns:={ns}',
               '--params-file', str(params_file)]
-             for name in ('mpx_node_cpp', 'mpx_wbc_node', 'mpx_llc_node')]
+             for name in ('mpx_node_cpp', 'mpx_wbc_node')]
     feeder = [sys.executable, str(Path(__file__).resolve().with_name('benchmark_ros_feedback.py')),
               '--params-file', str(params_file)]
     monitor = [sys.executable, str(Path(__file__).resolve().with_name('check_mpx_rates.py')),
                '--duration', str(args.duration), '--startup-timeout', str(args.startup_timeout),
                '--fsm-topic', params['inputs']['fsm_state_topic'],
                '--mpc-topic', params['outputs']['trajectory_topic'],
-               '--wbc-topic', params['outputs']['joint_command_topic'],
-               '--llc-topic', params['outputs']['llc_command_topic']]
-    for component in ('mpc', 'wbc', 'llc'):
+               '--wbc-topic', params['outputs']['joint_command_topic']]
+    for component in ('mpc', 'wbc'):
         monitor += [f'--{component}-hz', str(params['timing'][component + '_frequency'])]
     return nodes, feeder, monitor
 
