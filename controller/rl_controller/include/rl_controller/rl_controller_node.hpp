@@ -86,12 +86,14 @@ protected:
   void cmd_vel_cb(const geometry_msgs::msg::Twist::SharedPtr msg);
   void posestamped_cb(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
   void fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg);
+  void watchdog_mode_cb(const std_msgs::msg::String::SharedPtr msg);
   void mpc_joint_command_cb(const sensor_msgs::msg::JointState & msg);
   void joy_cb(const sensor_msgs::msg::Joy::SharedPtr msg);
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscription_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr posestamped_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fsm_goal_subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr watchdog_mode_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mpc_handoff_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr mpc_subscription_;

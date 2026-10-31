@@ -36,6 +36,9 @@
       # std_msgs/String with the FSM mode ("mpc", "rl_N", "idle", ...).
       # Empty = MPX always active; set = MPX runs only in "mpc" mode.
       mode_command_topic: ""
+      # std_msgs/String, command_watchdog request "<mode>: <reason>" (latched, "" = none), applied like
+      # mode_command_topic. Empty = unused.
+      watchdog_mode_topic: ""
       # std_msgs/String, current RL FSM state (rl_controller). Empty = unused: MPX then
       # cannot tell idle/transform_down (the FSM never enters "mpc" from there).
       fsm_state_topic: ""

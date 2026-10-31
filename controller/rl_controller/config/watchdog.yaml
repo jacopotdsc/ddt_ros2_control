@@ -1,0 +1,35 @@
+# command_watchdog (src/command_watchdog.cpp), loaded by hw.launch.py and sim_gazebo.launch.py.
+# Always started by hw.launch.py and sim_gazebo.launch.py, with the timeout below.
+/**:
+  ros__parameters:
+    # FSM states where every case below is checked: MPX and the RL policies (rl_policy_names of
+    # controllers.yaml). Elsewhere (idle, transform_up stand-up, transform_down, joint_pd) the
+    # watchdog requests nothing: 2026-10-28, it stopped the stand-up on the robot.
+    active_states: [mpc, rl_flat]
+    # No twist on command/cmd_twist for this long (s) -> transform_down, at every tick.
+    timeout: 5.0
+    # Body IMU (imu_sensor_broadcaster/imu) -> idle, once when exceeded.
+    # Measured 2026-10-26: normal mpc |wz| <= 1.15, |w_xy| <= 0.9, tilt <= 8 deg; transform_down
+    # |w_xy| up to 3.5 rad/s, tilt up to 25.5 deg (Gazebo) / 16 deg (robot); robot yaw spin
+    # |wz| 5.5 rad/s. Keep w_xy and tilt above the fold, else idle drops the robot halfway.
+    max_yaw_rate: 1.0          # rad/s, |wz|
+    max_roll_rate: 1.0         # rad/s, |wx|
+    max_pitch_rate: 1.0        # rad/s, |wy|
+    max_roll_deg: 20.0         # deg, |roll| from the IMU orientation (above the fold's 25.5 tilt)
+    max_tilt_deg: 20.0         # deg, base tilt from the IMU orientation
+    # No body IMU data for this long (s) -> idle; also the age above which roll and tilt are
+    # not trusted. Armed by the first IMU message.
+    imu_timeout: 5.0
+    # Forward speed, filtered_state twist.linear.x (base_link), mean over speed_window -> idle.
+    # Robot bags 2026-10-07..26: normal driving 0.5 s mean <= 0.50 m/s (peak 0.54); MPX takeover
+    # peaks up to 1.47 m/s for < 0.2 s (0.5 s mean 0.37); forward run of 00-58: 0.5 s mean 0.88.
+    max_linear_speed: 1.0      # m/s
+    speed_window: 0.5          # s
+    # Joints from joint_states, matched by name; max_torque follows this order.
+    joint_names: [joint_left_leg_1, joint_left_leg_2, joint_left_leg_3, joint_left_leg_4,
+                  joint_right_leg_1, joint_right_leg_2, joint_right_leg_3, joint_right_leg_4]
+    # Measured effort above max_torque for torque_hold s in a row -> idle (joint stuck or fighting).
+    # Robot bags: peaks 61.5 / 41.6 / 59.4 / 16.7 Nm (leg 1/2/3/wheel), above 50 Nm at most
+    # 0.15 s in a row; 0.5 s mean at most 47.0 / 16.8 / 37.1 / 6.6 Nm (leg 1: transform_up).
+    max_torque: [55.0, 40.0, 50.0, 15.0, 55.0, 40.0, 50.0, 15.0]   # Nm
+    torque_hold: 1.0           # s

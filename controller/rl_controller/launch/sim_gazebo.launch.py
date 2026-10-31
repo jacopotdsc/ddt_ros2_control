@@ -19,7 +19,6 @@ def launch_setup(context, *args, **kwargs):
     robot_name = LaunchConfiguration("robot").perform(context)
     # Same namespace argument as hw.launch.py (empty by default, like the MPX nodes).
     ns = LaunchConfiguration("namespace").perform(context)
-    command_timeout = float(LaunchConfiguration("command_timeout").perform(context))
     # Gazebo entity name: also the model MPX looks up in /model_states (inputs.model_name).
     entity = ns.strip("/") or robot_name
 
@@ -75,12 +74,60 @@ def launch_setup(context, *args, **kwargs):
             additional_env=env, output="screen",
         ))
 
+    description_share = get_package_share_directory(robot_name + "_description")
+    # TITA uses a robot subdirectory; the DDT descriptions use xacro/ directly.
+    robot_xacro_path = os.path.join(description_share, robot_name, "xacro", "robot.xacro")
+    if not os.path.isfile(robot_xacro_path):
+        robot_xacro_path = os.path.join(description_share, "xacro", "robot.xacro")
+
+    def expand(xacro_path):
+        description = xacro.process_file(
+            xacro_path,
+            mappings={
+                "hw_env": "gazebo",
+                "sim_env": "gazebo",
+                "ctrl_mode": "wbc",
+                "yaml_path": "gazebo_bridge",
+            },
+        ).toxml()
+
+        # Replace package:// URIs for all *_description packages
+        description_packages = ["d1_description", "d1h_description", "tita_description", "titatit_description"]
+        for desc_pkg in description_packages:
+            package_uri = "package://" + desc_pkg
+            if package_uri in description:
+                description = description.replace(
+                    package_uri,
+                    "file://" + get_package_share_directory(desc_pkg),
+                )
+
+        return description.replace(
+            get_package_share_directory("gazebo_bridge")+ "/config/controllers.yaml",
+            get_package_share_directory("rl_controller")+ "/config/" + robot_name + "/controllers.yaml",
+        )
+
+    # Controller model (MPX, state estimator, robot_state_publisher): robot.xacro, as on the robot.
+    robot_description = expand(robot_xacro_path)
+    # Plant model simulated by Gazebo: robot_gazebo.xacro next to robot.xacro when present (a copy
+    # of robot.xacro changed step by step towards the real robot), else the controller model.
+    gazebo_xacro_path = os.path.join(os.path.dirname(robot_xacro_path), "robot_gazebo.xacro")
+    if os.path.isfile(gazebo_xacro_path):
+        fd, gazebo_urdf_path = tempfile.mkstemp(prefix="tita_gazebo_", suffix=".urdf")
+        with os.fdopen(fd, "w") as f:
+            f.write(expand(gazebo_xacro_path))
+        spawn_source = ["-file", gazebo_urdf_path]
+        plant = gazebo_xacro_path
+    else:
+        spawn_source = ["-topic", f"{ns}/robot_description"]
+        plant = robot_xacro_path
+    models_info = launch.actions.LogInfo(
+        msg=f"Gazebo simulates {plant}; controllers use robot_description from {robot_xacro_path}")
+
     spawn_entity = Node(
         package="gazebo_ros",
         executable="spawn_entity.py",
         arguments=[
-            "-topic",
-            f"{ns}/robot_description",
+            *spawn_source,
             "-entity",
             entity,
             "-robot_namespace",
@@ -95,37 +142,6 @@ def launch_setup(context, *args, **kwargs):
         output="screen",
     )
 
-    description_share = get_package_share_directory(robot_name + "_description")
-    # TITA uses a robot subdirectory; the DDT descriptions use xacro/ directly.
-    robot_xacro_path = os.path.join(description_share, robot_name, "xacro", "robot.xacro")
-    if not os.path.isfile(robot_xacro_path):
-        robot_xacro_path = os.path.join(description_share, "xacro", "robot.xacro")
-
-    robot_description = xacro.process_file(
-        robot_xacro_path,
-        mappings={
-            "hw_env": "gazebo",
-            "sim_env": "gazebo",
-            "ctrl_mode": "wbc",
-            "yaml_path": "gazebo_bridge",
-        },
-    ).toxml()
-
-    # Replace package:// URIs for all *_description packages
-    description_packages = ["d1_description", "d1h_description", "tita_description", "titatit_description"]
-    for desc_pkg in description_packages:
-        package_uri = "package://" + desc_pkg
-        if package_uri in robot_description:
-            robot_description = robot_description.replace(
-                package_uri,
-                "file://" + get_package_share_directory(desc_pkg),
-            )
-
-    robot_description = robot_description.replace(
-        get_package_share_directory("gazebo_bridge")+ "/config/controllers.yaml",
-        get_package_share_directory("rl_controller")+ "/config/" + robot_name + "/controllers.yaml",
-    )
-    # print(robot_description)
 
     robot_state_pub_node = Node(
         package="robot_state_publisher",
@@ -167,30 +183,36 @@ def launch_setup(context, *args, **kwargs):
             ns + "/controller_manager",
         ],
     )
+    # Lost keyboard / remote: fold the robot, as in hw.launch.py.
+    watchdog_node = Node(
+        package="rl_controller",
+        executable="command_watchdog",
+        output="screen",
+        parameters=[os.path.join(
+            get_package_share_directory("rl_controller"), "config", "watchdog.yaml")],
+        namespace=ns,
+    )
+    # Always runs, so it can be compared with /model_states even when MPX uses the
+    # ground truth (written for TITA: its 8 joints and wheels).
+    state_estimator_node = Node(
+        package="tita_state_estimator",
+        executable="state_estimator_node",
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+        namespace=ns,
+    )
     nodes = [
         physics_info,
+        models_info,
         robot_state_pub_node,
         *gazebo,
         spawn_entity,
         joint_state_broadcaster_spawner,
         imu_sensor_broadcaster_spawner,
         rl_controller_spawner,
+        #watchdog_node,
+        state_estimator_node,
     ]
-
-    # TITA only (the filter is written for its 8 joints and wheels). Always runs, so it
-    # can be compared with /model_states even when MPX uses the ground truth.
-    if robot_name == "tita":
-        nodes.append(Node(
-            package="tita_state_estimator", executable="state_estimator_node", output="screen",
-            namespace=ns, parameters=[{"use_sim_time": True}],
-        ))
-
-    # Lost keyboard / remote: fold the robot, as in hw.launch.py.
-    if command_timeout > 0:
-        nodes.append(Node(
-            package="rl_controller", executable="command_watchdog", output="screen",
-            namespace=ns, parameters=[{"timeout": command_timeout}],
-        ))
 
     # MPX is not started here, as on the robot: run mpx_node_cpp and mpx_wbc_node
     # by hand (base from the filter; ground truth with
@@ -236,13 +258,6 @@ def generate_launch_description():
             "rtf", default_value="1.0",
             description="Target real-time factor. Below 1 MPX gets more wall time per control "
                         "period (useful with the GUI or a loaded CPU)",
-        )
-    )
-    declared_arguments.append(
-        launch.actions.DeclareLaunchArgument(
-            "command_timeout",
-            default_value="1.0",
-            description="s without commands (keyboard/remote twist) before transform_down; 0 disables",
         )
     )
     return LaunchDescription(

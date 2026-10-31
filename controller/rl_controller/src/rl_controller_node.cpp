@@ -73,6 +73,9 @@ controller_interface::CallbackReturn RlController::on_configure(
   fsm_goal_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
     ros_topic::manager_key_command, qos,
     std::bind(&RlController::fsm_goal_cb, this, std::placeholders::_1));
+  watchdog_mode_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
+    ros_topic::watchdog_mode, rclcpp::QoS(1).reliable().transient_local(),
+    std::bind(&RlController::watchdog_mode_cb, this, std::placeholders::_1));
 
   mpc_subscription_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
     ros_topic::mpx_joint_command, rclcpp::QoS(1).best_effort(),
@@ -437,6 +440,13 @@ void RlController::fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg)
     }
   }
   cmd->fsm_name_ = msg->data;
+}
+
+void RlController::watchdog_mode_cb(const std_msgs::msg::String::SharedPtr msg)
+{
+  if (msg->data.empty()) return;  // no request in progress
+  RCLCPP_ERROR(get_node()->get_logger(), "command_watchdog requests %s.", msg->data.c_str());
+  fsm_goal_cb(msg);
 }
 
 void RlController::joy_cb(const sensor_msgs::msg::Joy::SharedPtr msg)

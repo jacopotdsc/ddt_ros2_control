@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.5)
 project(gazebo_bridge)
 
+# Simulation only: on the robot (aarch64) Gazebo, Webots and MuJoCo are not installed, so the
+# package is registered empty instead of failing the whole workspace build.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+  message(STATUS "${PROJECT_NAME}: skipped on ${CMAKE_SYSTEM_PROCESSOR} (simulation only)")
+  find_package(ament_cmake REQUIRED)
+  ament_package()
+  return()
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()

@@ -58,6 +58,22 @@ KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & optio
       }
     });
 
+    watchdog_mode_subscription_ = this->create_subscription<std_msgs::msg::String>(
+    ros_topic::watchdog_mode, rclcpp::QoS(1).reliable().transient_local(),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      const std::string & mode = msg->data;
+      const bool known = std::any_of(
+        fsm_state_mapping.begin(), fsm_state_mapping.end(),
+        [&mode](const auto & pair) { return pair.second == mode; });
+      if (!known) return;
+      fsm_goal_.data = mode;
+      twist_ = geometry_msgs::msg::Twist();
+      mpx_keys_locked_ = false;
+      print_interface();
+      std::cout << RED << "  [WATCHDOG] Request \"" << mode << "\" state" << RESET
+                << std::endl;
+    });
+
   this->timer_ =
     this->create_wall_timer(10ms, std::bind(&KeyboardControllerNode::PubCmdVelCallBack, this));
   std::shared_ptr<std::thread> read_key_thread =

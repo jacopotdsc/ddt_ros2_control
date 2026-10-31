@@ -60,7 +60,7 @@ else()
   target_link_libraries(rl_controller rl_controller_parameters onnxruntime)
 endif()
 
-# Robot-side node: transform_down when the command sources (keyboard, remote) go silent.
+# Robot-side safety watchdog: requests idle / transform_down (src/command_watchdog.cpp).
 ament_auto_add_executable(command_watchdog NO_TARGET_LINK_LIBRARIES src/command_watchdog.cpp)
 
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})

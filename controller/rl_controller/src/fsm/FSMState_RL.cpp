@@ -149,9 +149,8 @@ std::string FSMState_RL::checkTransition()
     }
   } else if (desiredState == "transform_down") {
     this->_nextStateName = "transform_down";
-    // } else if (desiredState == "idle") {
-    //   // normal c
-    //   this->_nextStateName = "idle";
+  } else if (desiredState == "idle") {
+     this->_nextStateName = "idle";
   }
   return this->_nextStateName;
 }

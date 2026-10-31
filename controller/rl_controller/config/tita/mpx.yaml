@@ -13,6 +13,7 @@
       joint_states_topic: joint_states
       filtered_state_topic: filtered_state     # tita_state_estimator
       mode_command_topic: command/cmd_key
+      watchdog_mode_topic: command/watchdog_mode  # published by command_watchdog
       fsm_state_topic: fsm_state               # published by rl_controller
       pose_command_topic: command/cmd_pose
       cmd_vel_topic: command/cmd_twist

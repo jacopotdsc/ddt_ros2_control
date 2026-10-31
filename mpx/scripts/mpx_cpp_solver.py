@@ -83,6 +83,9 @@ class Solver:
         self.theta_wbc = np.asarray(0., dtype=np.float64)
         self.com_err_integral = np.zeros(3)  # integral of the COM error, Ki term of the WBC QP
         self.base_err_integral = np.zeros(3)  # integral of the base roll/pitch error, Ki_base term
+        self.wheel_deficit = np.zeros(2)  # [left, right] wheel velocity deficit (m/s), Ki_wheel term
+        self._wheel_v_prev = None  # measured wheel speeds at the previous WBC call
+        self._wheel_a_asked = None  # wheel accelerations the MPC asked at the previous WBC call
         self._wbc_template = self.mpc.init_state()
         # Phases (config.weight_phases; the C++ nodes pass the phase index): MPC weight matrix and
         # WBC entry ("weights" plus the integral parameters) of each.
@@ -164,7 +167,8 @@ class Solver:
         """Index of a weight phase in config.weight_phases (what the C++ nodes exchange)."""
         return self.phases.index(name)
 
-    def wbc_controller(self, template, theta_prev, raw, qpos, qvel, u, height, com_err_integral, base_err_integral, ww):
+    def wbc_controller(self, template, theta_prev, raw, qpos, qvel, u, height, com_err_integral, base_err_integral,
+                       wheel_err_integral, ww):
         """WBC on measured state, using the held first input from the latest MPC plan."""
         tita_state, x0, theta_prev = self.mpc.process_state(*raw, theta_prev)
         state = template.replace(sol=ControlSol(
@@ -176,6 +180,7 @@ class Solver:
             com_height_target=height,
             com_err_integral=com_err_integral[None, :],
             base_err_integral=base_err_integral[None, :],
+            wheel_err_integral=wheel_err_integral[None, :],
             ww=ww,
         )
         flags = jnp.array([
@@ -216,7 +221,8 @@ class Solver:
         for _ in range(3):
             tau, qddot, _, flags = self._wbc_call(0)(
                 self._wbc_template, np.asarray(0., dtype=np.float64), raw,
-                data.qpos.copy()[None, :], data.qvel.copy()[None, :], u, command[:, 3], np.zeros(3), np.zeros(3))
+                data.qpos.copy()[None, :], data.qvel.copy()[None, :], u, command[:, 3], np.zeros(3), np.zeros(3),
+                np.zeros((2, 3)))
             jax.block_until_ready(tau)
             if not np.all(np.asarray(flags)) or not np.all(np.isfinite(tau)):
                 raise RuntimeError('MPX WBC warm-up produced invalid control')
@@ -268,6 +274,9 @@ class Solver:
             self.theta_wbc = np.asarray(0., dtype=np.float64)
             self.com_err_integral = np.zeros(3)
             self.base_err_integral = np.zeros(3)
+            self.wheel_deficit = np.zeros(2)
+            self._wheel_v_prev = None
+            self._wheel_a_asked = None
 
     def wbc(self, u, height, phase=0):
         """WBC on the state of the last prepare_wbc(); returns [tau (8), qddot (nv)].
@@ -282,15 +291,17 @@ class Solver:
         p = self.wbc_phases[phase]
         ww = p["weights"]
         # Integral of the COM height error for the QP's Ki term (only z: the horizontal
-        # COM target comes from the MPC). No wind-up during large transients, nor while
-        # the phase has no COM integral (it then starts from zero in the next phase).
+        # COM target comes from the MPC). Integrates while the phase has a COM integral (frozen
+        # otherwise: it starts from zero in the next phase). No band; bounded only by
+        # |integral| <= com_integral_max.
         error = height - data.subtree_com[self.base_id, 2]
-        if float(ww['Ki_com'][2]) > 0. and abs(error) < p["com_integral_band"]:
+        if float(ww['Ki_com'][2]) > 0.:
             self.com_err_integral[2] = np.clip(self.com_err_integral[2] + error * cfg.dt_wbc,
                                                -p["com_integral_max"], p["com_integral_max"])
         # Integral of the base roll/pitch error for the QP's Ki_base term: same angle-axis error
         # as the QP (mpc_utils err_rotation), with the target = the base levelled at its own yaw,
-        # so the yaw component is ~0 (heading is the MPC's job).
+        # so the yaw component is ~0 (heading is the MPC's job). No band; bounded only by
+        # |integral| <= base_integral_max.
         if float(ww['Ki_base']) > 0.:
             Rb = data.xmat[self.base_id].reshape(3, 3)
             yaw = np.arctan2(Rb[1, 0], Rb[0, 0])
@@ -301,13 +312,30 @@ class Solver:
             n = np.linalg.norm(axis)
             err = angle * (Ra @ (axis / n)) if angle > 1e-7 and n > 1e-7 else np.zeros(3)
             err[2] = 0.
-            if np.linalg.norm(err) < p["base_integral_band"]:
-                self.base_err_integral = np.clip(self.base_err_integral + err * cfg.dt_wbc,
-                                                 -p["base_integral_max"], p["base_integral_max"])
+            self.base_err_integral = np.clip(self.base_err_integral + err * cfg.dt_wbc,
+                                             -p["base_integral_max"], p["base_integral_max"])
+        # Wheel velocity deficit for the QP's Ki_wheel term: per wheel, time integral of the
+        # acceleration along the heading the MPC asked at the previous call (a -/+ alpha d/2) minus
+        # the one the wheel made since then. It is the planned wheel motion lost to friction; ~0
+        # when the wheels follow the plan. Bounded only by |deficit| <= wheel_integral_max.
+        # The MPC's a and alpha are scalars along the heading; the QP wheel tasks are world 3D, so
+        # the deficit is applied along the heading (same convention as process_state: axle from
+        # the right to the left wheel center, heading = axle x z).
+        centers, wheel_vel_world = self.raw_wbc[2], self.raw_wbc[5]
+        axle = centers[0] - centers[1]
+        heading = np.array([axle[1], -axle[0], 0.]) / max(np.hypot(axle[0], axle[1]), 1e-9)
+        wheel_v = wheel_vel_world @ heading  # [left, right] speed along the heading
+        if float(ww['Ki_wheel']) > 0. and self._wheel_v_prev is not None:
+            a_done = (wheel_v - self._wheel_v_prev) / cfg.dt_wbc
+            self.wheel_deficit = np.clip(self.wheel_deficit + (self._wheel_a_asked - a_done) * cfg.dt_wbc,
+                                         -p["wheel_integral_max"], p["wheel_integral_max"])
+        self._wheel_v_prev = wheel_v
+        self._wheel_a_asked = np.array([u[0] - u[2] * cfg.d / 2., u[0] + u[2] * cfg.d / 2.])
         tau, qddot, theta, flags = self._wbc_call(phase)(
             self._wbc_template, self.theta_wbc, self.raw_wbc,
             data.qpos.copy()[None, :], data.qvel.copy()[None, :], u,
-            np.asarray([height], dtype=np.float64), self.com_err_integral.copy(), self.base_err_integral.copy())
+            np.asarray([height], dtype=np.float64), self.com_err_integral.copy(), self.base_err_integral.copy(),
+            np.outer(self.wheel_deficit, heading))
         out = np.concatenate((np.asarray(tau), np.asarray(qddot)))
         if out.shape != (8 + self.nv,) or not np.all(np.isfinite(out)) or not np.all(np.asarray(flags)):
             raise ValueError('Invalid WBC result; holding the last valid command')

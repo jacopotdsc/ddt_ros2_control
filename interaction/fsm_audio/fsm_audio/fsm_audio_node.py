@@ -13,7 +13,7 @@ class FsmAudioNode(Node):
         super().__init__("fsm_audio_node")
         self.declare_parameter("state_topic", "fsm_state")
         self.declare_parameter(
-            "audio_service", "system/audio_control/play_audio_with_file_path"
+            "audio_service", "/tita4267305/system/audio_control/play_audio_with_file_path"
         )
         self.declare_parameter("announce_initial_state", True)
 

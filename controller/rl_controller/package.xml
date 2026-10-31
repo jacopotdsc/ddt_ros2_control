@@ -17,6 +17,7 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
 
   <depend>generate_parameter_library</depend>
   <depend>Eigen3</depend>

@@ -81,6 +81,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr mpx_keys_locked_subscription_;
   std::atomic<bool> mpx_keys_locked_{false};
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fsm_state_subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr watchdog_mode_subscription_;
   std::mutex fsm_state_mutex_;
   std::string fsm_state_;  // current rl_controller FSM state
   std::string FsmState();
