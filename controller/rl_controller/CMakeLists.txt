@@ -25,6 +25,7 @@ set(FSM_FILES
   src/fsm/FSMState.cpp
   src/fsm/FSMState_MPC.cpp
   src/fsm/FSMState_JointPD.cpp
+  src/fsm/FSMState_JointCmd.cpp
   src/fsm/FSMState_Passive.cpp
   src/fsm/FSMState_TransformUp.cpp
   src/fsm/FSMState_TransformDown.cpp

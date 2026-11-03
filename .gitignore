@@ -5,3 +5,21 @@ log
 jax_cache
 __pycache__/
 md_files
+# friction_test: datasets and identification outputs (CSV)
+friction_test/**/*.csv
+friction_test/scripts/plot_identification*/
+
+# Generated videos, ROS bags and PNG figures
+/friction_test/wbc_comp_video/
+*.mp4
+*.avi
+*.mkv
+*.webm
+*.png
+bag/
+bags/
+*_bag/
+*.bag
+*.db3
+*.db3-*
+*.mcap

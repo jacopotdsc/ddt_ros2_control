@@ -26,6 +26,8 @@ inline const std::string manager_pose_command = "command/cmd_pose";
 inline const std::string manager_key_command = "command/cmd_key";
 inline const std::string fsm_state = "fsm_state";  // current rl_controller FSM state, on change
 inline const std::string watchdog_mode = "command/watchdog_mode";
+// FSM state joint_cmd: per joint [q_des, dq_des, tau_ff, kp, kd], in the order of the controller joints
+inline const std::string joint_command = "command/joint_cmd";
 
 // locomotion
 inline const std::string body_imu = "imu_sensor_broadcaster/imu";

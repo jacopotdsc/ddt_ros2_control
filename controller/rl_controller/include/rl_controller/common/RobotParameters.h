@@ -61,6 +61,11 @@ struct MpcParameters
   scalar_t command_timeout{1.0};  // s without a new MPX command before folding (transform_down)
 };
 
+struct JointCmdParameters
+{
+  scalar_t command_timeout{0.2};  // s without a new command/joint_cmd before zero torque
+};
+
 struct RLParameters
 {
   std::string policy_path;
@@ -114,6 +119,7 @@ struct RobotControlParameters
   TransformDownParameters transform_down_params;
   JointPDParameters joint_pd_params;
   MpcParameters mpc_params;
+  JointCmdParameters joint_cmd_params;
   std::vector<RLParameters> rl_params;
 
   std::vector<std::string> rl_policy_names;

@@ -52,6 +52,8 @@ std::string FSMState_Passive::checkTransition()
     this->_nextStateName = "transform_up";
   } else if (desire_state == "joint_pd") {
     this->_nextStateName = "joint_pd";
+  } else if (desire_state == "joint_cmd") {
+    this->_nextStateName = "joint_cmd";
   }
   return this->_nextStateName;
 }

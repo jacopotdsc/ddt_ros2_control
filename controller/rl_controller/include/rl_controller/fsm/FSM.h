@@ -22,6 +22,7 @@
 
 #include "FSMState.h"
 #include "FSMState_MPC.h"
+#include "FSMState_JointCmd.h"
 #include "FSMState_JointPD.h"
 #include "FSMState_Passive.h"
 #include "FSMState_RL.h"
@@ -36,6 +37,7 @@ struct FSMStateList
   // FSMState_BalanceStand * balanceStand;
   FSMState_TransformUp * transformUp;
   FSMState_JointPD * jointPD;
+  FSMState_JointCmd * jointCmd;
   FSMState_TransformDown * transformDown;
   std::vector<FSMState *> rlLists;
 
@@ -46,6 +48,7 @@ struct FSMStateList
     // delete balanceStand;
     delete transformUp;
     delete jointPD;
+    delete jointCmd;
     delete transformDown;
     // delete rl;
     for (auto ptr : rlLists) {

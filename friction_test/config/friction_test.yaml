@@ -1,0 +1,56 @@
+# friction_test_node parameters (loaded from the installed share/friction_test/config; edit here and
+# rebuild). Topics come from ros_utils/topic_names.hpp: joint_states, fsm_state, command/cmd_key,
+# command/joint_cmd.
+/**:
+  ros__parameters:
+    use_sim_time: true
+    # Joint order of command/joint_cmd: the joints parameter of tita_rl_controller (controllers.yaml).
+    joints: [joint_left_leg_1, joint_left_leg_2, joint_left_leg_3, joint_left_leg_4,
+             joint_right_leg_1, joint_right_leg_2, joint_right_leg_3, joint_right_leg_4]
+    # joint_pd gains (those of transform_up in rl_controller/config/tita/controllers.yaml), in the order
+    # of joints. Used for holding and for the tests. Wheels: derivative only (kp 0, velocity tracking).
+    joint_kp: [600.0, 80.0, 80.0, 0.0, 600.0, 80.0, 80.0, 0.0]
+    joint_kd: [8.0, 8.0, 8.0, 0.5, 8.0, 8.0, 8.0, 0.5]
+    # Default pose (key 1, and hold pose of the joints not under test), per leg, both legs:
+    # [leg_1 abduction, leg_2 hip pitch, leg_3 knee, leg_4 wheel]. The wheels (continuous) are held
+    # where they are instead of being turned back to 0.
+    default_pose: [0.0, 0.5, -1.0, 0.0]
+    command_rate: 250.0          # Hz, on the simulated clock
+    home_ramp_time: 3.0          # s, joint_pd: ramp from the current pose to the default pose
+    csv_dir: ~/ddt_ros2_ws/src/friction_test/friction_test_csv
+
+    # Trajectory shape (generate_joint_trajectory).
+    trajectory:
+      speed_fractions: [0.1, 0.2, 0.35, 0.5, 0.75, 1.0]   # constant-speed levels, fractions of dq_max
+      sweeps_per_level: 2       # legs: back-and-forth sweeps per level
+      acc_max_leg: 10.0         # rad/s^2, peak acceleration of the ramps (legs)
+      acc_max_wheel: 20.0       # rad/s^2 (wheels)
+      wheel_hold_time: 4.0      # s at each constant wheel speed
+      pause_time: 0.5           # s at rest between segments
+      chirp_time: 10.0          # s of final sinusoid with increasing frequency (inertia)
+      chirp_f0: 0.2             # Hz
+      chirp_f1: 1.5             # Hz
+      approach_speed: 0.5       # rad/s, legs: move from the hold pose to the sweep start and back
+
+    # Keys 2-9: one joint per test (the others hold the default pose).
+    tests:
+      key_2: [joint_left_leg_4]    # left wheel
+      key_3: [joint_right_leg_4]   # right wheel
+      key_4: [joint_left_leg_3]    # left knee
+      key_5: [joint_right_leg_3]   # right knee
+      key_6: [joint_left_leg_2]    # left hip pitch
+      key_7: [joint_right_leg_2]   # right hip pitch
+      key_8: [joint_left_leg_1]    # left abduction
+      key_9: [joint_right_leg_1]   # right abduction
+    # Test speed dq_max per joint (rad/s). Joint limits come from the URDF (robot_description):
+    # leg_1 abduction [-0.785, 0.785], leg_2 hip pitch [-1.920, 3.491], leg_3 knee [-2.670, -0.698];
+    # wheels continuous (limits unused).
+    dq_max:
+      joint_left_leg_1: 1.0
+      joint_right_leg_1: 1.0
+      joint_left_leg_2: 2.0
+      joint_right_leg_2: 2.0
+      joint_left_leg_3: 2.0
+      joint_right_leg_3: 2.0
+      joint_left_leg_4: 15.0
+      joint_right_leg_4: 15.0

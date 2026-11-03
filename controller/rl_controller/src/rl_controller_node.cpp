@@ -80,6 +80,9 @@ controller_interface::CallbackReturn RlController::on_configure(
   mpc_subscription_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
     ros_topic::mpx_joint_command, rclcpp::QoS(1).best_effort(),
     [this](const sensor_msgs::msg::JointState::SharedPtr msg) { mpc_joint_command_cb(*msg); });
+  joint_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+    ros_topic::joint_command, rclcpp::QoS(1).best_effort(),
+    [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg) { joint_command_cb(*msg); });
   mpc_handoff_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
     ros_topic::mpx_handoff, rclcpp::QoS(1),
     [this](const std_msgs::msg::String::SharedPtr msg) {
@@ -425,6 +428,35 @@ void RlController::mpc_joint_command_cb(const sensor_msgs::msg::JointState & msg
   mpc_stats_start_ = now;
 }
 
+void RlController::joint_command_cb(const std_msgs::msg::Float64MultiArray & msg)
+{
+  // data = per joint [q_des, dq_des, tau_ff, kp, kd], joints in the order of the joints parameter.
+  const auto n = joint_names_.size();
+  bool ok = msg.data.size() == 5 * n;
+  for (size_t i = 0; ok && i < msg.data.size(); ++i) ok = std::isfinite(msg.data[i]);
+  if (!ok) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
+      "Invalid joint_cmd ignored (need 5 finite values per joint, %zu joints).", n);
+    return;
+  }
+  std::lock_guard<std::mutex> lock(controlData_->joint_command.mutex);
+  auto & cmd = controlData_->joint_command;
+  cmd.q_des.resize(n);
+  cmd.qd_des.resize(n);
+  cmd.tau_ff.resize(n);
+  cmd.kp.resize(n);
+  cmd.kd.resize(n);
+  for (size_t i = 0; i < n; ++i) {
+    cmd.q_des[i] = msg.data[5 * i];
+    cmd.qd_des[i] = msg.data[5 * i + 1];
+    cmd.tau_ff[i] = msg.data[5 * i + 2];
+    cmd.kp[i] = msg.data[5 * i + 3];
+    cmd.kd[i] = msg.data[5 * i + 4];
+  }
+  cmd.valid = true;
+  cmd.received = std::chrono::steady_clock::now();
+}
+
 void RlController::fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(fsm_goal_mutex_);
@@ -512,6 +544,9 @@ void RlController::update_control_parameters()
   get_node()->get_parameter<std::vector<scalar_t>>("mpc.joint_kp", mpc_params.joint_kp);
   get_node()->get_parameter<std::vector<scalar_t>>("mpc.joint_kd", mpc_params.joint_kd);
   get_node()->get_parameter<scalar_t>("mpc.command_timeout", mpc_params.command_timeout);
+  // JointCmdParameters
+  get_node()->get_parameter<scalar_t>(
+    "joint_cmd.command_timeout", controlData_->params->joint_cmd_params.command_timeout);
   // RLParameters
   auto get_policy_params = [this](const std::string & policy_name, RLParameters & rl_params) {
     get_node()->get_parameter<std::string>(policy_name + ".policy_path", rl_params.policy_path);

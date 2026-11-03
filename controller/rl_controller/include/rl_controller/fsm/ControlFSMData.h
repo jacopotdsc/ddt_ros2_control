@@ -45,6 +45,15 @@ struct MpcCommand
   std::vector<double> run_us, latency_ms;
 };
 
+// command/joint_cmd (FSMState_JointCmd): low-level targets and gains per joint, applied as they are.
+struct JointCommand
+{
+  std::mutex mutex;
+  std::vector<double> q_des, qd_des, tau_ff, kp, kd;
+  bool valid = false;
+  std::chrono::steady_clock::time_point received{};
+};
+
 struct ControlFSMData
 {
   // EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -57,6 +66,7 @@ struct ControlFSMData
   };
 
   MpcCommand mpc_command;
+  JointCommand joint_command;
   std::shared_ptr<RobotControlParameters> params;
   std::shared_ptr<LowlevelCmd> low_cmd;
   std::shared_ptr<LowlevelState> low_state;

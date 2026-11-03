@@ -3,7 +3,8 @@
 
 const std::vector<std::pair<char, std::string>> KeyboardControllerNode::fsm_state_mapping = {
 {'0', "rl_0"}, {'1', "rl_1"}, {'2', "rl_2"},         {'3', "rl_3"},           {'4', "mpc"},
-  {'5', "residual"}, {'6', "idle"}, {'7', "transform_up"}, {'8', "transform_down"}, {'9', "joint_pd"}};
+  {'5', "residual"}, {'6', "idle"}, {'7', "transform_up"}, {'8', "transform_down"}, {'9', "joint_pd"},
+  {'c', "joint_cmd"}};  // joint_cmd: command/joint_cmd applied as it is (e.g. friction_test node)
 
 KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & options)
 : Node("keyboard_controller", options)

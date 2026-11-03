@@ -73,6 +73,10 @@
         joint_kp: [600.0, 80.0, 80.0, 5.0, 600.0, 80.0, 80.0, 5.0]
         joint_kd: [8.0, 8.0, 8.0, 0.2, 8.0, 8.0, 8.0, 0.2]
       
+      joint_cmd:
+        # FSM state joint_cmd: applies command/joint_cmd (per joint q_des, dq_des, tau_ff, kp, kd) as it is.
+        command_timeout: 0.2  # seconds without a new command before zero torque
+      
       mpc:
         command_timeout: 1.0  # seconds without new MPX commands (WBC/MPC stopped) before FSMState_MPC folds the robot
         joint_kp: [20.0, 20.0, 20.0, 0.0, 20.0, 20.0, 20.0, 0.0]

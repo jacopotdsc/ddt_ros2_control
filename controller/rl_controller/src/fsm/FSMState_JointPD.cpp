@@ -84,6 +84,8 @@ std::string FSMState_JointPD::checkTransition()
     this->_nextStateName = "idle";
   } else if (desire_state == "transform_down") {
     this->_nextStateName = "transform_down";
+  } else if (desire_state == "joint_cmd") {
+    this->_nextStateName = "joint_cmd";
   }
   // Get the next state
   return this->_nextStateName;
