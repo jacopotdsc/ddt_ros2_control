@@ -131,13 +131,13 @@ def central_difference(y, dt, cfA, orderA, butter):
 
 
 def clear_data(data, order, butter, cfT=33.0, cfV=18.0, cfA=15.0, cut_time_before=0.0, cut_time_after=np.inf,
-               point_number=None, qd_min=0.0):
+               point_number=None, qd_min=0.0, downsample=None):
     """dataProcessing.m for one data file (one joint record of load_data), same steps and names.
 
     order: low-pass order (theirs: orderT = orderV = orderA = 4), passed to every filter.
     butter: True = Butterworth (as theirs), False = simple low-pass; passed to every filter.
-    point_number: wished number of data points (their pointNumber), ds = ceil(n / point_number);
-    None: all samples (ds = 1).
+    point_number: max number of data points (their pointNumber), ds = ceil(n / point_number); None: no limit.
+    downsample: fixed factor ds (keep one sample every ds) when point_number is None; None or 1: all samples.
     Differences: low_pass(..., butter) gives the Butterworth (as theirs) or a simple low-pass.
     Returns the dict out: t, q, dq (qdot), ddq (qddot), tau (torq), i (number of points), plus the
     columns of the file (q_des, dq_des, level, segment), fs and used (|qd| >= qd_min, for the fit;
@@ -158,7 +158,10 @@ def clear_data(data, order, butter, cfT=33.0, cfV=18.0, cfA=15.0, cut_time_befor
     # measurement frequency in Hz
     fs = 1.0 / dt
     # downsample factor. Approximates the number of points someone wants to keep (None: all samples).
-    ds = 1 if point_number is None else int(np.ceil(n / point_number))
+    # fixed factor (the paper: "downsampled by a factor of 10"); max points per file (their pointNumber) wins
+    ds = 1 if downsample is None else max(1, int(downsample))
+    if point_number is not None:
+        ds = int(np.ceil(n / point_number))
 
     # approximate acceleration and filter it.
     qddots = np.zeros_like(vel)
@@ -248,10 +251,11 @@ def identify(clean, model, k=0.3, includeOffset=False, loss="cauchy"):
     """AlgNoAlphaFMOnly of SysIDAlgFMParamOnly.m (alpha = 1), with one SciPy least_squares per joint.
 
     T_hat = tau_meas - tau of the WBC model (their T_hat = T - W_ip*X_ip), Wfm = [qdd, sgn(qd), qd, (1)]
-    for [Im, Fc, Fv, (beta)], bounds Im, Fc, Fv >= 0. The residual is normalized by its standard deviation
-    after a plain least-squares fit (their covariance normalization); the robust loss with f_scale = k
-    (their k = 0.3) lowers the weight of large residuals, smoothly instead of their 0/1 weights.
-    No MultiStart: the problem is linear, its solution unique."""
+    for [Im, Fc, Fv, (beta)], bounds Im, Fc, Fv >= 0. Only SciPy as it is: a plain bounded linear fit
+    (lsq_linear) gives the starting point and the residual scale sigma; then least_squares with the robust
+    loss and f_scale = k * sigma (their k = 0.3 on the residual normalized by its spread), which lowers the
+    weight of large residuals smoothly. Their 0/1 "hard redescender" weights are not a SciPy loss, so they
+    are not used. No MultiStart: the problem is linear, its solution unique."""
     params = {}
     for key, c in clean.items():
         c["tau_urdf"] = model.inverse_dynamics(c["q"], c["dq"], c["ddq"])
@@ -262,18 +266,16 @@ def identify(clean, model, k=0.3, includeOffset=False, loss="cauchy"):
             Wfm = np.column_stack([qdd, np.sign(qd), qd] + ([np.ones_like(qd)] if includeOffset else []))
             lb = [0.0, 0.0, 0.0] + ([-np.inf] if includeOffset else [])
             Ws, Ts = Wfm[used], T_hat[used]
-            # plain bounded linear fit (exact), then the robust fit started from it, strictly inside the
-            # bounds (least_squares stops at once when it starts on a bound)
+            # plain bounded linear fit (exact): starting point and residual scale; then the robust fit
             x0 = lsq_linear(Ws, Ts, bounds=(lb, np.inf)).x
             sigma = np.std(Ts - Ws @ x0) or 1.0
-            x0 = np.maximum(x0, np.array(lb) + 1e-6)
-            X = least_squares(lambda x: (Ws @ x - Ts) / sigma, x0, bounds=(lb, np.inf), loss=loss, f_scale=k).x
+            X = least_squares(lambda x: Ws @ x - Ts, x0, bounds=(lb, np.inf), loss=loss, f_scale=k * sigma).x
             names = ["Im", "Fc", "Fv"] + (["beta"] if includeOffset else [])
             params[j] = {n: float(v) for n, v in zip(names, X)}
             params[j].setdefault("beta", 0.0)
             params[j].update(
                 samples=int(len(T_hat)), samples_used=int(used.sum()),
-                samples_within_k=int((np.abs(Ts - Ws @ X) / sigma <= k).sum()),
+                samples_within_k=int((np.abs(Ts - Ws @ X) <= k * sigma).sum()),
                 rms_residual_before=float(np.sqrt(np.mean(T_hat**2))),
                 rms_residual_after=float(np.sqrt(np.mean((T_hat - Wfm @ X) ** 2))))
             c.setdefault("residual", {})[j] = T_hat
@@ -281,12 +283,13 @@ def identify(clean, model, k=0.3, includeOffset=False, loss="cauchy"):
 
 
 # ── 4. validation: forward simulation (Fig. 4, eq. 33) ───────────────────────
-def simulate(clean, params, model, seg=0.5, dt=0.001):
+def simulate(clean, params, model, seg=0.5, dt=0.001, truth=None):
     """Per joint, segments of `seg` s restarting from the measured state; only that joint is
     integrated (other joints at their recorded / held state), with the recorded torque held between
     samples (ZOH): (M_jj + Im) qdd = tau - bias - Fv qd - Fc sgn(qd) - beta. Viscous and Coulomb
     friction are integrated implicitly (stick when the torque cannot overcome Fc), instead of ode15s,
-    to avoid chattering at qd = 0. Two cases: manufacturer (no friction, Im = 0) and identified.
+    to avoid chattering at qd = 0. Cases: manufacturer (no friction, Im = 0), identified and, with
+    truth (Gazebo <dynamics> per joint), oracle (the true Fc, Fv, Im = 0: the best this model can do).
     L2 (eq. 33) on the position for the legs, on the velocity for the wheels (continuous joints: their
     angle has no meaning and its error only accumulates); the model torque does not depend on the wheel
     angle (checked: 8e-5 Nm over a turn)."""
@@ -296,7 +299,10 @@ def simulate(clean, params, model, seg=0.5, dt=0.001):
         for j in c["joints"]:
             i = JOINTS.index(j)
             out = {"t": t, "q_meas": c["q"][:, i], "dq_meas": c["dq"][:, i], "wheel": j.endswith("_4")}
-            for case, p in (("manufacturer", dict(Im=0.0, Fc=0.0, Fv=0.0, beta=0.0)), ("identified", params[j])):
+            cases = [("manufacturer", dict(Im=0.0, Fc=0.0, Fv=0.0, beta=0.0)), ("identified", params[j])]
+            if truth and j in truth:
+                cases.append(("oracle", dict(Im=0.0, Fc=truth[j]["Fc"], Fv=truth[j]["Fv"], beta=0.0)))
+            for case, p in cases:
                 q_sim, dq_sim = np.empty(len(t)), np.empty(len(t))
                 seg_start = 0
                 for k in range(len(t)):
@@ -325,8 +331,26 @@ def simulate(clean, params, model, seg=0.5, dt=0.001):
             sim[j] = out
             var = "dq" if out["wheel"] else "q"
             l2[j] = {case: float(np.sqrt(np.sum((out[f"{var}_{case}"] - out[f"{var}_meas"]) ** 2)))
-                     for case in ("manufacturer", "identified")}
+                     for case, _ in cases}
     return sim, l2
+
+
+def friction_torque(p, qd, qdd):
+    """Im qdd + Fc sgn(qd) + Fv qd + beta (the identified model, as in identify)."""
+    return p["Im"] * qdd + p["Fc"] * np.sign(qd) + p["Fv"] * qd + p.get("beta", 0.0)
+
+
+def torque_rmse(clean, params, model):
+    """Fig. 3 check on any data: RMS of measured torque - (tau_URDF + friction model), per joint."""
+    out = {}
+    for c in clean.values():
+        if "tau_urdf" not in c:
+            c["tau_urdf"] = model.inverse_dynamics(c["q"], c["dq"], c["ddq"])
+        for j in c["joints"]:
+            i = JOINTS.index(j)
+            pred = c["tau_urdf"][:, i] + friction_torque(params[j], c["dq"][:, i], c["ddq"][:, i])
+            out[j] = float(np.sqrt(np.mean((c["tau"][:, i] - pred) ** 2)))
+    return out
 
 
 # ── 5. outputs ────────────────────────────────────────────────────────────────
@@ -342,7 +366,7 @@ def gazebo_truth():
 
 
 def save_data(params, clean, sim, out_dir=HERE / "data_identification"):
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     truth = gazebo_truth()
     for j in params:
         params[j]["Fc_gazebo"] = truth.get(j, {}).get("Fc", float("nan"))
@@ -375,11 +399,60 @@ def save_data(params, clean, sim, out_dir=HERE / "data_identification"):
                             s["dq_meas"][k], s["dq_manufacturer"][k], s["dq_identified"][k]])
 
 
+def plot_reconstruction(sim, l2, clean, params, model, truth, out_dir, title=""):
+    """Signal reconstruction per joint (on the data of `clean`, the validation set when given):
+    1) measured q (wheels: dq) and the forward simulation with the manufacturer, identified and oracle
+       model (segments of 0.5 s restarting from the measured state, Fig. 4 of the paper);
+    2) error measured - simulated;
+    3) measured torque and the torque predicted from the measured motion (Fig. 3): tau_URDF alone
+       (manufacturer), tau_URDF + identified friction, tau_URDF + true friction (oracle)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    colors = {"manufacturer": "tab:blue", "identified": "tab:red", "oracle": "tab:green"}
+    for c in clean.values():
+        if "tau_urdf" not in c:
+            c["tau_urdf"] = model.inverse_dynamics(c["q"], c["dq"], c["ddq"])
+        for j in c["joints"]:
+            s, i = sim[j], JOINTS.index(j)
+            var, unit = ("dq", "[rad/s]") if s["wheel"] else ("q", "[rad]")
+            fig, ax = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+            ax[0].plot(s["t"], s[f"{var}_meas"], "k", lw=1.2, label="measured")
+            for case in l2[j]:
+                ax[0].plot(s["t"], s[f"{var}_{case}"], color=colors[case], lw=0.8, label=f"{case} (L2 {l2[j][case]:.3f})")
+                ax[1].plot(s["t"], s[f"{var}_meas"] - s[f"{var}_{case}"], color=colors[case], lw=0.8, label=case)
+            for a in ax[:2]:
+                for k in s["segment_start"][1:]:
+                    a.axvline(s["t"][k], color="0.88", lw=0.4, ls=":")
+            ax[1].axhline(0.0, color="k", lw=0.6)
+            ax[0].set_ylabel(f"{'velocity' if s['wheel'] else 'position'} {unit}")
+            ax[1].set_ylabel(f"measured − simulated {unit}")
+            tau_m = c["tau"][:, i]
+            ax[2].plot(c["t"], tau_m, "k", lw=1.0, label="measured (filtered)")
+            preds = {"manufacturer": c["tau_urdf"][:, i],
+                     "identified": c["tau_urdf"][:, i] + friction_torque(params[j], c["dq"][:, i], c["ddq"][:, i])}
+            if truth and j in truth:
+                preds["oracle"] = c["tau_urdf"][:, i] + friction_torque(
+                    dict(Im=0.0, Fc=truth[j]["Fc"], Fv=truth[j]["Fv"]), c["dq"][:, i], c["ddq"][:, i])
+            for case, pr in preds.items():
+                ax[2].plot(c["t"], pr, color=colors[case], lw=0.7,
+                           label=f"{case} (RMS {np.sqrt(np.mean((tau_m - pr) ** 2)):.3f} N·m)")
+            ax[2].set_ylabel("torque [N·m]")
+            ax[2].set_xlabel("time [s]")
+            p = params[j]
+            ax[0].set_title(f"{j} {title}: identified Im {p['Im']:.4f}, Fc {p['Fc']:.3f}, Fv {p['Fv']:.3f}"
+                            + (f"  (true Fc {truth[j]['Fc']}, Fv {truth[j]['Fv']})" if truth and j in truth else ""))
+            for a in ax:
+                a.grid(alpha=0.3)
+                a.legend(loc="upper right", fontsize=7, ncol=4)
+            fig.tight_layout()
+            fig.savefig(out_dir / f"reconstruction_{j}.png", dpi=110)
+            plt.close(fig)
+
+
 def plot_identification(sim, l2, fs, out_dir=HERE / "plot_identification"):
     """One figure per joint: error of the reconstructed trajectory, measured (CSV) - simulated, with
     the manufacturer model (blue) and with the identified model (red), at fs; dotted lines between
     the simulation segments (each restarts from the measured state, error 0)."""
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     for j, s in sim.items():
         fig, ax = plt.subplots(figsize=(14, 4.5))
         for k in s["segment_start"][1:]:
@@ -399,50 +472,83 @@ def plot_identification(sim, l2, fs, out_dir=HERE / "plot_identification"):
         fig.tight_layout()
         fig.savefig(out_dir / f"{j}.png", dpi=120)
         plt.close(fig)
+    cases = list(next(iter(l2.values())))
     with open(out_dir / "l2_table.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["joint", "L2_manufacturer", "L2_identified"])
+        w.writerow(["joint"] + [f"L2_{c}" for c in cases])
         for j, v in l2.items():
-            w.writerow([j, v["manufacturer"], v["identified"]])
+            w.writerow([j] + [v[c] for c in cases])
     with open(out_dir / "l2_table.md", "w") as f:
-        f.write("| joint | L2 manufacturer | L2 identified |\n|---|---|---|\n")
+        f.write("| joint | " + " | ".join(f"L2 {c}" for c in cases) + " |\n" + "|---" * (len(cases) + 1) + "|\n")
         for j, v in l2.items():
-            f.write(f"| {j} | {v['manufacturer']:.4f} | {v['identified']:.4f} |\n")
+            f.write(f"| {j} | " + " | ".join(f"{v[c]:.4f}" for c in cases) + " |\n")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--csv-dir", default=str(PKG / "friction_test_csv"))
+    ap.add_argument("--csv-dir", default=str(PKG / "friction_test_csv" / "csv_simulazione"))
     ap.add_argument("--point-number", type=int, default=None,
-                    help="wished number of data points per file (pointNumber); default all samples")
+                    help="max data points per test file (their pointNumber); default: max_points_per_test of "
+                         "config/identification.yaml")
     ap.add_argument("--cf-tau", type=float, default=33.0)
     ap.add_argument("--cf-vel", type=float, default=18.0)
     ap.add_argument("--cf-acc", type=float, default=15.0)
     ap.add_argument("--order", type=int, default=4, help="low-pass order (theirs: 4)")
-    ap.add_argument("--butter", action="store_true", help="Butterworth (as theirs) instead of the simple low-pass")
+    ap.add_argument("--butter", action=argparse.BooleanOptionalAction, default=True,
+                    help="Butterworth (as theirs, default); --no-butter: simple low-pass")
+    ap.add_argument("--downsample", type=int, default=None,
+                    help="keep one sample every N for the fit (paper: 10); default: downsample of "
+                         "config/identification.yaml")
     ap.add_argument("--qd-min", type=float, default=0.0)
     ap.add_argument("--k", type=float, default=0.3, help="their k: robust scale on the normalized residual")
     ap.add_argument("--loss", default="cauchy", help="least_squares loss (cauchy, arctan, soft_l1, huber, linear)")
     ap.add_argument("--offset", action="store_true", help="also identify a torque offset beta")
     ap.add_argument("--seg", type=float, default=0.5, help="simulation segment length [s]")
+    ap.add_argument("--val-csv-dir", default=None,
+                    help="validation data (e.g. excitation B): forward simulation, L2 and figures on it instead "
+                         "of on the identification data")
+    ap.add_argument("--no-sim", action="store_true", help="skip the forward simulation (parameters only)")
     ap.add_argument("--data-dir", default=str(HERE / "data_identification"))
     ap.add_argument("--plot-dir", default=str(HERE / "plot_identification"))
     args = ap.parse_args()
+    with open(PKG / "config" / "identification.yaml") as f:
+        settings = yaml.safe_load(f) or {}
+    if args.downsample is None:
+        args.downsample = int(settings.get("downsample", 1) or 1)
+    if args.point_number is None:
+        args.point_number = settings.get("max_points_per_test")
+    print(f"sampling of the fit: downsample {args.downsample}, max points per test {args.point_number}")
 
     data = load_data(args.csv_dir)
     print("data files:", list(data))
     # one clear_data per data file, as SysIDData.m calls dataProcessing.m for each file
     clean = {j: clear_data(rec, args.order, args.butter, cfT=args.cf_tau, cfV=args.cf_vel, cfA=args.cf_acc, point_number=args.point_number,
-                           qd_min=args.qd_min) for j, rec in data.items()}
+                           qd_min=args.qd_min, downsample=args.downsample) for j, rec in data.items()}
     model = DynamicModel()
     params = identify(clean, model, k=args.k, includeOffset=args.offset, loss=args.loss)
-    sim, l2 = simulate(clean, params, model, seg=args.seg)
+    truth = gazebo_truth()
+    val = clean
+    if args.val_csv_dir:
+        vdata = load_data(args.val_csv_dir)
+        print("validation files:", list(vdata))
+        # validation always at the full rate (no downsampling), so its L2 does not depend on the fit's sampling
+        val = {j: clear_data(rec, args.order, args.butter, cfT=args.cf_tau, cfV=args.cf_vel, cfA=args.cf_acc,
+                             qd_min=0.0) for j, rec in vdata.items()}
+    rmse = torque_rmse(val, params, model)
+    if args.no_sim:
+        save_data(params, clean, {}, Path(args.data_dir))
+        for j, p in params.items():
+            print(f"| {j} | {p['Im']:.4f} | {p['Fc']:.3f} | {p['Fv']:.3f} | torque RMS {rmse[j]:.3f} |")
+        return
+    sim, l2 = simulate(val, params, model, seg=args.seg, truth=truth)
     save_data(params, clean, sim, Path(args.data_dir))
-    plot_identification(sim, l2, next(iter(clean.values()))["fs"], Path(args.plot_dir))
-    print("| joint | Im | Fc (gazebo) | Fv (gazebo) | used | L2 manufacturer | L2 identified |")
+    plot_identification(sim, l2, next(iter(val.values()))["fs"], Path(args.plot_dir))
+    plot_reconstruction(sim, l2, val, params, model, truth, Path(args.plot_dir),
+                        title="(validation)" if args.val_csv_dir else "")
+    print("| joint | Im | Fc (gazebo) | Fv (gazebo) | used | torque RMS | " + " | ".join(f"L2 {c}" for c in next(iter(l2.values()))) + " |")
     for j, p in params.items():
         print(f"| {j} | {p['Im']:.4f} | {p['Fc']:.3f} ({p['Fc_gazebo']}) | {p['Fv']:.3f} ({p['Fv_gazebo']}) | "
-              f"{p['samples_used']}/{p['samples']} | {l2[j]['manufacturer']:.3f} | {l2[j]['identified']:.3f} |")
+              f"{p['samples_used']}/{p['samples']} | {rmse[j]:.3f} | " + " | ".join(f"{v:.3f}" for v in l2[j].values()) + " |")
 
 
 if __name__ == "__main__":

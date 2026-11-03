@@ -13,15 +13,12 @@
 
 namespace
 {
-// Margin (rad) taken from both URDF joint limits before generating a trajectory: the trajectory stays in
-// [lower + LIMIT_MARGIN, upper - LIMIT_MARGIN].
-constexpr double LIMIT_MARGIN = 0.1;
 // Key t: seconds holding the default pose between two tests of the sequence.
 constexpr double SEQUENCE_PAUSE = 3.0;
 constexpr double DT = JointTrajectory::DT;
 const std::vector<std::string> SEGMENTS = {
-  "start", "pause", "approach", "sweep+", "sweep-", "speed+", "speed-", "chirp", "return"};
-enum Segment : uint8_t { START, PAUSE, APPROACH, SWEEP_POS, SWEEP_NEG, SPEED_POS, SPEED_NEG, CHIRP, RETURN };
+  "start", "pause", "approach", "sweep+", "sweep-", "speed+", "speed-", "return"};
+enum Segment : uint8_t { START, PAUSE, APPROACH, SWEEP_POS, SWEEP_NEG, SPEED_POS, SPEED_NEG, RETURN };
 
 double smoothstep(double x)
 {
@@ -54,31 +51,31 @@ std::vector<double> speed_profile(double v, double acc_max, double cruise_time)
   return vel;
 }
 
-// Positions from qa to qb at constant speed v (smooth ramps; lower speed if the stroke is short).
-std::vector<double> move_profile(double qa, double qb, double v, double acc_max)
-{
-  const double distance = std::abs(qb - qa);
-  v = std::min(std::abs(v), std::sqrt(distance * acc_max / 1.5));  // ramps alone: v * 1.5 v / acc_max
-  const double ramp_distance = v * 1.5 * v / acc_max;
-  const auto vel = speed_profile(v, acc_max, std::max(distance - ramp_distance, 0.0) / v);
-  std::vector<double> q(vel.size());
-  double disp = 0.;
-  for (size_t i = 0; i < vel.size(); ++i) q[i] = (disp += vel[i] * DT);
-  const double sign = qb > qa ? 1.0 : -1.0;
-  for (auto & x : q) x = qa + sign * x * (distance / disp);
-  return q;
-}
+// Duration of a smooth stroke of length D with peak acceleration a_peak (smooth_stroke).
+double stroke_time(double D, double a_peak) { return 2.0 * std::sqrt(2.0 * D / a_peak); }
 
-// Sinusoid with frequency f0 -> f1 and a 1 s smooth envelope at both ends, unit amplitude.
-std::vector<double> chirp(double duration, double f0, double f1)
+// Smooth rest-to-rest stroke from qa to qb. Acceleration: a triangle in each half of the stroke,
+// 0 -> a_peak (at a quarter of the time) -> 0 at mid-stroke, then the same negative down to 0 at qb.
+// Velocity and acceleration are 0 at both ends, the velocity is highest at mid-stroke:
+// half duration tau = sqrt(2 D / a_peak), v_mid = a_peak tau / 2 = sqrt(a_peak D / 2).
+std::vector<double> smooth_stroke(double qa, double qb, double a_peak)
 {
-  std::vector<double> y(samples(duration));
-  for (size_t i = 0; i < y.size(); ++i) {
-    const double t = i * DT;
-    const double phase = 2 * M_PI * (f0 * t + 0.5 * (f1 - f0) * t * t / duration);
-    y[i] = smoothstep(t) * smoothstep(duration - t) * std::sin(phase);
+  const double D = std::abs(qb - qa), sign = qb > qa ? 1.0 : -1.0;
+  const double T = stroke_time(D, a_peak), tau = 0.5 * T, a = a_peak;
+  auto half = [a, tau](double t) {  // displacement in the first half, 0 <= t <= tau
+    if (t <= 0.5 * tau) return a / (3 * tau) * t * t * t;
+    const double u = t - 0.5 * tau;
+    return a * tau * tau / 24 + a * tau / 4 * u + 0.5 * a * u * u - a / (3 * tau) * u * u * u;
+  };
+  const size_t n = samples(T);
+  std::vector<double> q(n);
+  for (size_t i = 1; i <= n; ++i) {
+    const double t = std::min(i * DT, T);
+    const double disp = t <= tau ? half(t) : D - half(T - t);
+    q[i - 1] = qa + sign * disp;
   }
-  return y;
+  q.back() = qb;
+  return q;
 }
 
 std::vector<double> gradient(const std::vector<double> & x)
@@ -142,7 +139,9 @@ std::string JointTrajectory::write_csv(
 {
   std::filesystem::create_directories(dir);
   const std::string path = dir + "/" + joint + suffix + ".csv";
-  std::ofstream f(path);
+  std::ofstream f;
+  f.exceptions(std::ios::failbit | std::ios::badbit);
+  f.open(path);
   f << "t_sim,q_des,dq_des,ddq_des,q,dq,tau_applied,kp,kd,speed_level,segment";
   // then the state of every joint, as their data files hold all joints (q, qd, tau_obs)
   for (const char * name : {"q_", "dq_", "tau_"}) {
@@ -158,6 +157,7 @@ std::string JointTrajectory::write_csv(
     }
     f << "\n";
   }
+  f.close();  // report buffered write errors before announcing success
   return path;
 }
 
@@ -181,20 +181,33 @@ FrictionTestNode::FrictionTestNode(const rclcpp::NodeOptions & options)
   csv_dir_ = declare_parameter<std::string>("csv_dir");
   speed_fractions_ = declare_parameter<std::vector<double>>("trajectory.speed_fractions");
   sweeps_per_level_ = declare_parameter<int>("trajectory.sweeps_per_level");
-  acc_max_leg_ = declare_parameter<double>("trajectory.acc_max_leg");
-  acc_max_wheel_ = declare_parameter<double>("trajectory.acc_max_wheel");
+  acc_fractions_ = declare_parameter<std::vector<double>>("trajectory.acc_fractions");
+  lower_bound_ = declare_parameter<std::vector<double>>("lower_bound");
+  upper_bound_ = declare_parameter<std::vector<double>>("upper_bound");
   wheel_hold_time_ = declare_parameter<double>("trajectory.wheel_hold_time");
   pause_time_ = declare_parameter<double>("trajectory.pause_time");
-  chirp_time_ = declare_parameter<double>("trajectory.chirp_time");
-  chirp_f0_ = declare_parameter<double>("trajectory.chirp_f0");
-  chirp_f1_ = declare_parameter<double>("trajectory.chirp_f1");
-  approach_speed_ = declare_parameter<double>("trajectory.approach_speed");
   for (const auto & [key, state, action] : key_mapping) {
     if (action.rfind("test_", 0) == 0) {
       tests_[key] = declare_parameter<std::vector<std::string>>(std::string("tests.key_") + key);
     }
   }
-  for (const auto & j : joints_) dq_max_[j] = declare_parameter<double>("dq_max." + j);
+  // acc_max.<joint>, the only acceleration of the trajectories: legs, peak of the strokes; wheels, peak of the
+  // ramps between the speed steps (the wheel speeds come from lower_bound/upper_bound)
+  for (const auto & j : joints_) {
+    acc_max_[j] = declare_parameter<double>("acc_max." + j);
+    if (acc_max_[j] <= 0.) throw std::invalid_argument("acc_max." + j + " must be > 0");
+  }
+  if (lower_bound_.size() != joints_.size() || upper_bound_.size() != joints_.size()) {
+    throw std::invalid_argument("lower_bound/upper_bound need one value per joint");
+  }
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    const bool wheel = joints_[i].back() == '4';
+    if (wheel ? !(lower_bound_[i] < 0. && upper_bound_[i] > 0.) : lower_bound_[i] >= upper_bound_[i]) {
+      throw std::invalid_argument(
+        wheel ? "wheel " + joints_[i] + ": lower_bound < 0 < upper_bound (speeds, rad/s)"
+              : "lower_bound must be < upper_bound for " + joints_[i]);
+    }
+  }
   if (kp_.size() != joints_.size() || kd_.size() != joints_.size() || default_pose_.size() != 4) {
     throw std::invalid_argument("joint_kp/joint_kd need one gain per joint, default_pose 4 values per leg");
   }
@@ -243,7 +256,8 @@ FrictionTestNode::FrictionTestNode(const rclcpp::NodeOptions & options)
 // ── interface (as keyboard_controller) ────────────────────────────────────
 void FrictionTestNode::print_interface()
 {
-  system("clear");
+  // Keep the control callback independent of spawning a shell/clear process.
+  std::cout << "\033[2J\033[H";
   std::cout << R"(
   -------------------------------------------------------
                       State Machines)"
@@ -384,12 +398,26 @@ bool FrictionTestNode::start_test(char k)
     note(std::string(1, k) + ": no joint limits yet (robot_description)", true);
     return false;
   }
+  // The test range (lower_bound, upper_bound of the yaml) must lie inside the URDF limits: positions for the
+  // legs, speeds for the wheels (continuous joints, URDF velocity limit).
+  for (const auto & j : tests_.at(k)) {
+    const size_t i = std::find(joints_.begin(), joints_.end(), j) - joints_.begin();
+    const bool wheel = j.back() == '4';
+    const auto & l = joint_limits_.at(j);
+    const double lo = wheel ? -joint_velocity_limits_.at(j) : l[0], hi = wheel ? joint_velocity_limits_.at(j) : l[1];
+    if (lower_bound_[i] < lo || upper_bound_[i] > hi) {
+      std::ostringstream e;
+      e << k << ": " << j << (wheel ? " speeds [" : " range [") << lower_bound_[i] << ", " << upper_bound_[i]
+        << "] outside the URDF limits [" << lo << ", " << hi << "], test refused";
+      note(e.str(), true);
+      return false;
+    }
+  }
   test_.clear();
   double duration = 0.;
   for (const auto & j : tests_.at(k)) {
     const size_t i = std::find(joints_.begin(), joints_.end(), j) - joints_.begin();
-    const auto & l = joint_limits_.at(j);
-    test_[i] = generate_joint_trajectory(j, l[0] + LIMIT_MARGIN, l[1] - LIMIT_MARGIN, dq_max_.at(j));
+    test_[i] = generate_joint_trajectory(j, lower_bound_[i], upper_bound_[i]);
     duration = std::max(duration, test_[i].duration());
   }
   test_key_ = k;
@@ -397,7 +425,9 @@ bool FrictionTestNode::start_test(char k)
   mode_ = Mode::TEST;
   std::ostringstream s;
   s << k << ": test started (" << std::fixed << std::setprecision(0) << duration << " s)";
+  if (!trajectory_info_.empty()) s << "  " << trajectory_info_;
   note(s.str());
+  RCLCPP_INFO(get_logger(), "%s", s.str().c_str());
   return true;
 }
 
@@ -458,7 +488,10 @@ void FrictionTestNode::on_robot_description(const std::string & xml)
   }
   for (const auto & j : joints_) {
     const auto joint = model.getJoint(j);
-    if (joint && joint->limits) joint_limits_[j] = {joint->limits->lower, joint->limits->upper};
+    if (joint && joint->limits) {
+      joint_limits_[j] = {joint->limits->lower, joint->limits->upper};
+      joint_velocity_limits_[j] = joint->limits->velocity;
+    }
   }
   note("joint limits from robot_description (" + std::to_string(joint_limits_.size()) + " joints)");
 }
@@ -489,6 +522,16 @@ void FrictionTestNode::on_joint_states(const sensor_msgs::msg::JointState & msg)
 void FrictionTestNode::ControlCallBack()
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  while (!csv_jobs_.empty() && csv_jobs_.front().wait_for(0s) == std::future_status::ready) {
+    try {
+      for (const auto & message : csv_jobs_.front().get()) note(message);
+    } catch (const std::exception & e) {
+      sequence_ = false;
+      note(std::string("CSV save failed: ") + e.what(), true);
+      RCLCPP_ERROR(get_logger(), "CSV save failed: %s", e.what());
+    }
+    csv_jobs_.pop_front();
+  }
   const double now = now_s();
   const size_t n = joints_.size();
   switch (mode_) {
@@ -543,10 +586,16 @@ void FrictionTestNode::ControlCallBack()
         duration = std::max(duration, traj.duration());
       }
       if (t > duration + 0.5) {
-        for (const auto & [i, traj] : test_) {
-          note(std::string(1, test_key_) + ": " + traj.joint + " done, " + std::to_string(traj.rows.size()) +
-               " rows -> " + traj.write_csv(csv_dir_, "", joints_));
-        }
+        csv_jobs_.push_back(std::async(std::launch::async,
+          [completed = std::move(test_), dir = csv_dir_, joints = joints_, key = test_key_]() {
+            std::vector<std::string> messages;
+            for (const auto & [i, traj] : completed) {
+              const auto path = traj.write_csv(dir, "", joints);
+              messages.push_back(std::string(1, key) + ": " + traj.joint + " done, " +
+                std::to_string(traj.rows.size()) + " rows -> " + path);
+            }
+            return messages;
+          }));
         test_.clear();
         start_joint_pd(std::string(1, test_key_) + " done");  // as key 1
       }
@@ -605,55 +654,55 @@ void FrictionTestNode::start_joint_pd(const std::string & reason)
 }
 
 // ── trajectories ──────────────────────────────────────────────────────────
-// Legs: back-and-forth strokes between q_lim_low and q_lim_high (URDF limits minus LIMIT_MARGIN) at constant speeds
-// (speed_fractions of dq_max; the strokes pass the same positions in both directions, so gravity
-// cancels in tau(q, +v) - tau(q, -v)), then a chirp around the middle for the inertia.
-// Wheels (continuous, limits unused): constant speed steps +v / -v of wheel_hold_time each, then a
-// chirp in velocity. Rows go to <csv_dir>/<joint_name>.csv when the test ends.
+// Legs: from the hold pose to q_lim_low, then for each level of acc_fractions sweeps_per_level times
+// q_lim_low -> q_lim_high -> q_lim_low with smooth strokes (smooth_stroke: velocity 0 at both ends and highest at
+// mid-range, acceleration a triangle per half up to a_peak = fraction * acc_max.<joint>), pause_time at the ends,
+// then back to the hold pose. q_lim_low/high = lower_bound/upper_bound of the yaml (checked inside the URDF limits
+// by the caller). The
+// strokes pass the same positions in both directions with opposite velocities, so gravity cancels in
+// tau(q, +v) - tau(q, -v). No sinusoids.
+// Wheels (continuous): constant speed steps +v / -v, v = speed_fractions of upper_bound / |lower_bound| (rad/s), of
+// wheel_hold_time each, ramps with peak acceleration acc_max.<wheel>. Rows go to <csv_dir>/<joint_name>.csv when
+// the test ends.
 JointTrajectory FrictionTestNode::generate_joint_trajectory(
-  const std::string & joint_name, double q_lim_low, double q_lim_high, double dq_max)
+  const std::string & joint_name, double q_lim_low, double q_lim_high)
 {
   const size_t i = std::find(joints_.begin(), joints_.end(), joint_name) - joints_.begin();
   const double q0 = hold_[i];
   Builder b(q0);
+  std::ostringstream info;
+  info << std::fixed << std::setprecision(2);
   if (joint_name.back() == '4') {
     for (size_t level = 0; level < speed_fractions_.size(); ++level) {
-      for (const double sign : {1.0, -1.0}) {
-        b.add_velocity(speed_profile(sign * speed_fractions_[level] * dq_max, acc_max_wheel_, wheel_hold_time_),
-                       static_cast<int>(level), sign > 0 ? SPEED_POS : SPEED_NEG);
+      for (const double v : {q_lim_high, q_lim_low}) {  // wheels: the bounds are the highest speeds
+        b.add_velocity(speed_profile(speed_fractions_[level] * v, acc_max_.at(joint_name), wheel_hold_time_),
+                       static_cast<int>(level), v > 0 ? SPEED_POS : SPEED_NEG);
         b.pause(pause_time_);
       }
     }
-    const double amplitude = std::min(0.5 * dq_max, 0.7 * acc_max_wheel_ / (2 * M_PI * chirp_f1_));  // rad/s
-    auto vel = chirp(chirp_time_, chirp_f0_, chirp_f1_);
-    for (auto & v : vel) v *= amplitude;
-    b.add_velocity(vel, -1, CHIRP);
-    b.pause(pause_time_);
+    info << joint_name << ": speed steps up to " << q_lim_low << " / " << q_lim_high << " rad/s";
+    trajectory_info_ = info.str();
     return b.build(joint_name);
   }
-  // q_lim_low / q_lim_high already include LIMIT_MARGIN (see the caller).
-  const double lo = q_lim_low, hi = q_lim_high;
-  auto approach = [this](double qa, double qb) {
-    return quintic(qa, qb, std::max(1.0, 1.875 * std::abs(qb - qa) / approach_speed_));
-  };
+  const double lo = q_lim_low, hi = q_lim_high, D = hi - lo, acc_max = acc_max_.at(joint_name);
+  // From the hold pose to lower_bound and back: the same quintic ramp as joint_pd (key 1, home_ramp_time),
+  // tracked by the PD.
+  auto approach = [this](double qa, double qb) { return quintic(qa, qb, home_ramp_time_); };
   b.add(approach(q0, lo), -1, APPROACH);
   b.pause(pause_time_);
-  for (size_t level = 0; level < speed_fractions_.size(); ++level) {
+  info << joint_name << " [" << lo << ", " << hi << "] rad:";
+  for (size_t level = 0; level < acc_fractions_.size(); ++level) {
+    const double a_peak = acc_fractions_[level] * acc_max;
     for (int k = 0; k < sweeps_per_level_; ++k) {
-      b.add(move_profile(lo, hi, speed_fractions_[level] * dq_max, acc_max_leg_), static_cast<int>(level), SWEEP_POS);
+      b.add(smooth_stroke(lo, hi, a_peak), static_cast<int>(level), SWEEP_POS);
       b.pause(pause_time_);
-      b.add(move_profile(hi, lo, speed_fractions_[level] * dq_max, acc_max_leg_), static_cast<int>(level), SWEEP_NEG);
+      b.add(smooth_stroke(hi, lo, a_peak), static_cast<int>(level), SWEEP_NEG);
       b.pause(pause_time_);
     }
+    info << " a " << a_peak << " v " << std::sqrt(a_peak * D / 2) << " T " << stroke_time(D, a_peak) << ";";
   }
-  const double middle = 0.5 * (lo + hi);
-  const double w1 = 2 * M_PI * chirp_f1_;
-  const double amplitude = std::min({0.4 * (hi - lo), 0.7 * dq_max / w1, 0.7 * acc_max_leg_ / (w1 * w1)});
-  b.add(approach(lo, middle), -1, APPROACH);
-  auto c = chirp(chirp_time_, chirp_f0_, chirp_f1_);
-  for (auto & x : c) x = middle + amplitude * x;
-  b.add(c, -1, CHIRP);
-  b.add(approach(middle, q0), -1, RETURN);
+  b.add(approach(lo, q0), -1, RETURN);
   b.pause(pause_time_);
+  trajectory_info_ = info.str();
   return b.build(joint_name);
 }

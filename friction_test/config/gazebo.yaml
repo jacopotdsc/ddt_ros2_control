@@ -1,0 +1,5 @@
+# The trajectory timer uses ROS time: Gazebo's default 10 Hz clock would reduce
+# the nominal 250 Hz command stream to bursts at about 20 Hz.
+gazebo:
+  ros__parameters:
+    publish_rate: 500.0

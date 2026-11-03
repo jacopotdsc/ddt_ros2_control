@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:macro name="ros2control" params="hw_env:='none' ">
+  <xacro:include filename="$(find tita_description)/xacro/sensor_noise.xacro" />
+  <!-- sensor_noise: true = sensor noise measured on the real robot (Gazebo bridge only, sensor_noise.xacro) -->
+  <xacro:macro name="ros2control" params="hw_env:='none' sensor_noise:='false' ">
     <xacro:if value="${hw_env != 'none'}">
       <gazebo reference="imu_link">
         <gravity>true</gravity>
@@ -48,6 +50,9 @@
         </xacro:if>
         <xacro:if value="${hw_env == 'gazebo'}">
           <plugin>usr_gazebo_ros2_control/GazeboBridge</plugin>
+          <xacro:if value="${sensor_noise}">
+            <xacro:sensor_noise_params />
+          </xacro:if>
         </xacro:if>
         <xacro:if value="${hw_env == 'hw'}">
           <plugin>tita_locomotion::HardwareBridge</plugin>

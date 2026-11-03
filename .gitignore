@@ -23,3 +23,7 @@ bags/
 *.db3
 *.db3-*
 *.mcap
+
+# Logs and JSON outputs
+*.log
+*.json

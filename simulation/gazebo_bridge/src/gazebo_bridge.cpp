@@ -14,7 +14,9 @@
 
 #include "gazebo_bridge/gazebo_bridge.h"
 
+#include <cmath>
 #include <limits>
+#include <random>
 #include <map>
 #include <memory>
 #include <string>
@@ -26,6 +28,26 @@
 #include "gazebo/sensors/SensorManager.hh"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
+
+// Measurement noise of the simulated sensors (<param name="noise_*"> of <ros2_control><hardware>),
+// applied in read() to everything the stack reads: joint position/velocity/effort and the IMU.
+// Gaussian (std) then quantization (round to a multiple of quant); 0 = off. Wheels = joint names
+// ending in "_4". The PD in write() uses the noisy measurements too, as everything else.
+struct SensorNoise
+{
+  double q_quant = 0.0;
+  double dq_std_leg = 0.0, dq_std_wheel = 0.0, dq_quant = 0.0;
+  double tau_std_leg = 0.0, tau_std_wheel = 0.0, tau_quant_leg = 0.0, tau_quant_wheel = 0.0;
+  double gyro_std = 0.0, gyro_bias = 0.0, acc_std = 0.0, rpy_std = 0.0;
+  unsigned int seed = 0;
+  bool any = false;
+  std::mt19937 rng;
+  std::normal_distribution<double> normal{0.0, 1.0};
+  std::array<double, 3> gyro_bias_drawn{0.0, 0.0, 0.0};
+
+  double gauss(double std) { return std > 0.0 ? std * normal(rng) : 0.0; }
+  static double quantize(double x, double step) { return step > 0.0 ? std::round(x / step) * step : x; }
+};
 
 struct MimicJoint
 {
@@ -106,6 +128,12 @@ public:
 
   /// \brief mapping of mimicked joints to index of joint they mimic
   std::vector<MimicJoint> mimic_joints_;
+
+  /// \brief measurement noise (all zero = exact Gazebo state)
+  SensorNoise noise_;
+
+  /// \brief per joint: true for the wheels (name ending in "_4")
+  std::vector<bool> is_wheel_;
 };
 
 namespace usr_gazebo_ros2_control
@@ -136,6 +164,50 @@ bool GazeboBridge::initSim(
 
   registerJoints(hardware_info, parent_model);
   registerSensors(hardware_info, parent_model);
+
+  // Sensor noise from the <hardware> parameters (absent = 0 = off).
+  auto & nz = this->dataPtr_->noise_;
+  auto par = [&hardware_info](const std::string & name) {
+    const auto it = hardware_info.hardware_parameters.find(name);
+    return it == hardware_info.hardware_parameters.end() ? 0.0 : std::stod(it->second);
+  };
+  nz.q_quant = par("noise_q_quant");
+  nz.dq_std_leg = par("noise_dq_std_leg");
+  nz.dq_std_wheel = par("noise_dq_std_wheel");
+  nz.dq_quant = par("noise_dq_quant");
+  nz.tau_std_leg = par("noise_tau_std_leg");
+  nz.tau_std_wheel = par("noise_tau_std_wheel");
+  nz.tau_quant_leg = par("noise_tau_quant_leg");
+  nz.tau_quant_wheel = par("noise_tau_quant_wheel");
+  nz.gyro_std = par("noise_gyro_std");
+  nz.gyro_bias = par("noise_gyro_bias");
+  nz.acc_std = par("noise_acc_std");
+  nz.rpy_std = par("noise_rpy_std");
+  nz.seed = static_cast<unsigned int>(par("noise_seed"));
+  nz.any = nz.q_quant > 0 || nz.dq_std_leg > 0 || nz.dq_std_wheel > 0 || nz.dq_quant > 0 ||
+           nz.tau_std_leg > 0 || nz.tau_std_wheel > 0 || nz.tau_quant_leg > 0 || nz.tau_quant_wheel > 0 ||
+           nz.gyro_std > 0 || nz.gyro_bias > 0 || nz.acc_std > 0 || nz.rpy_std > 0;
+  nz.rng.seed(nz.seed);
+  std::uniform_real_distribution<double> bias(-nz.gyro_bias, nz.gyro_bias);
+  for (auto & b : nz.gyro_bias_drawn) {
+    b = nz.gyro_bias > 0.0 ? bias(nz.rng) : 0.0;
+  }
+  this->dataPtr_->is_wheel_.clear();
+  for (const auto & name : this->dataPtr_->joint_names_) {
+    this->dataPtr_->is_wheel_.push_back(name.size() >= 2 && name.compare(name.size() - 2, 2, "_4") == 0);
+  }
+  if (nz.any) {
+    RCLCPP_WARN(
+      this->nh_->get_logger(),
+      "SENSOR NOISE ON (seed %u): q quant %.3g rad; dq std leg %.3g wheel %.3g, quant %.3g rad/s; "
+      "tau std leg %.3g wheel %.3g, quant leg %.3g wheel %.3g Nm; gyro std %.3g bias %.3g/%.3g/%.3g rad/s; "
+      "acc std %.3g m/s2; orientation std %.3g rad",
+      nz.seed, nz.q_quant, nz.dq_std_leg, nz.dq_std_wheel, nz.dq_quant, nz.tau_std_leg, nz.tau_std_wheel,
+      nz.tau_quant_leg, nz.tau_quant_wheel, nz.gyro_std, nz.gyro_bias_drawn[0], nz.gyro_bias_drawn[1],
+      nz.gyro_bias_drawn[2], nz.acc_std, nz.rpy_std);
+  } else {
+    RCLCPP_INFO(this->nh_->get_logger(), "sensor noise off (exact Gazebo state)");
+  }
 
   if (this->dataPtr_->n_dof_ == 0 && this->dataPtr_->n_sensors_ == 0) {
     RCLCPP_WARN_STREAM(this->nh_->get_logger(), "There is no joint or sensor available");
@@ -513,6 +585,17 @@ hardware_interface::return_type GazeboBridge::read(
       this->dataPtr_->joint_position_[j] = this->dataPtr_->sim_joints_[j]->Position(0);
       this->dataPtr_->joint_velocity_[j] = this->dataPtr_->sim_joints_[j]->GetVelocity(0);
       this->dataPtr_->joint_effort_[j] = this->dataPtr_->sim_joints_[j]->GetForce(0u);
+      auto & nz = this->dataPtr_->noise_;
+      if (nz.any) {
+        const bool wheel = this->dataPtr_->is_wheel_[j];
+        auto & q = this->dataPtr_->joint_position_[j];
+        auto & dq = this->dataPtr_->joint_velocity_[j];
+        auto & tau = this->dataPtr_->joint_effort_[j];
+        q = SensorNoise::quantize(q, nz.q_quant);
+        dq = SensorNoise::quantize(dq + nz.gauss(wheel ? nz.dq_std_wheel : nz.dq_std_leg), nz.dq_quant);
+        tau = SensorNoise::quantize(
+          tau + nz.gauss(wheel ? nz.tau_std_wheel : nz.tau_std_leg), wheel ? nz.tau_quant_wheel : nz.tau_quant_leg);
+      }
     }
   }
 
@@ -530,6 +613,21 @@ hardware_interface::return_type GazeboBridge::read(
     this->dataPtr_->imu_sensor_data_[j][7] = sim_imu->LinearAcceleration().X();
     this->dataPtr_->imu_sensor_data_[j][8] = sim_imu->LinearAcceleration().Y();
     this->dataPtr_->imu_sensor_data_[j][9] = sim_imu->LinearAcceleration().Z();
+
+    auto & nz = this->dataPtr_->noise_;
+    if (nz.any) {
+      auto & d = this->dataPtr_->imu_sensor_data_[j];
+      if (nz.rpy_std > 0.0) {  // small random rotation applied to the orientation
+        const ignition::math::Quaterniond noisy =
+          sim_imu->Orientation() *
+          ignition::math::Quaterniond(nz.gauss(nz.rpy_std), nz.gauss(nz.rpy_std), nz.gauss(nz.rpy_std));
+        d[0] = noisy.X(); d[1] = noisy.Y(); d[2] = noisy.Z(); d[3] = noisy.W();
+      }
+      for (int k = 0; k < 3; k++) {
+        d[4 + k] += nz.gyro_bias_drawn[k] + nz.gauss(nz.gyro_std);
+        d[7 + k] += nz.gauss(nz.acc_std);
+      }
+    }
   }
 
   for (unsigned int j = 0; j < this->dataPtr_->sim_ft_sensors_.size(); j++) {

@@ -1,0 +1,96 @@
+joint_left_leg_1:
+  Im: 1.4177547686145309e-25
+  Fc: 0.9249988007464272
+  Fv: 0.2372018541434326
+  beta: 0.0
+  samples: 12862
+  samples_used: 12862
+  samples_within_k: 8122
+  rms_residual_before: 0.9789908328000845
+  rms_residual_after: 0.7013846258930478
+  Fc_gazebo: 1.0
+  Fv_gazebo: 0.1
+joint_left_leg_2:
+  Im: 1.6352563016824374e-24
+  Fc: 0.9628218423075198
+  Fv: 0.13578821150120027
+  beta: 0.0
+  samples: 25167
+  samples_used: 25167
+  samples_within_k: 16767
+  rms_residual_before: 1.0229701984485677
+  rms_residual_after: 0.5057465302712356
+  Fc_gazebo: 1.0
+  Fv_gazebo: 0.1
+joint_left_leg_3:
+  Im: 4.626452921235045e-21
+  Fc: 0.9356215128192844
+  Fv: 0.17544430049771942
+  beta: 0.0
+  samples: 11894
+  samples_used: 11894
+  samples_within_k: 9200
+  rms_residual_before: 0.9921565205580573
+  rms_residual_after: 0.5572544486958382
+  Fc_gazebo: 1.0
+  Fv_gazebo: 0.1
+joint_left_leg_4:
+  Im: 1.6990341343760106e-20
+  Fc: 0.2975271587099157
+  Fv: 0.020413896689234625
+  beta: 0.0
+  samples: 12251
+  samples_used: 12251
+  samples_within_k: 10404
+  rms_residual_before: 0.3561068131093277
+  rms_residual_after: 0.12095498402200294
+  Fc_gazebo: 0.3
+  Fv_gazebo: 0.02
+joint_right_leg_1:
+  Im: 1.5554051597078632e-24
+  Fc: 0.9235994248933249
+  Fv: 0.23786504546021675
+  beta: 0.0
+  samples: 12862
+  samples_used: 12862
+  samples_within_k: 8133
+  rms_residual_before: 0.9826265299936544
+  rms_residual_after: 0.6304924984319766
+  Fc_gazebo: 1.0
+  Fv_gazebo: 0.1
+joint_right_leg_2:
+  Im: 3.417144114217839e-27
+  Fc: 0.9616261391055411
+  Fv: 0.13665914087444914
+  beta: 0.0
+  samples: 25167
+  samples_used: 25167
+  samples_within_k: 16502
+  rms_residual_before: 1.021657924334222
+  rms_residual_after: 0.512927885495582
+  Fc_gazebo: 1.0
+  Fv_gazebo: 0.1
+joint_right_leg_3:
+  Im: 5.3174532666267825e-21
+  Fc: 0.9343143643920656
+  Fv: 0.17754627225011738
+  beta: 0.0
+  samples: 11896
+  samples_used: 11896
+  samples_within_k: 9089
+  rms_residual_before: 0.9914965455335786
+  rms_residual_after: 0.5398155898563642
+  Fc_gazebo: 1.0
+  Fv_gazebo: 0.1
+joint_right_leg_4:
+  Im: 1.007265132273623e-21
+  Fc: 0.29776002648532635
+  Fv: 0.020361825684101532
+  beta: 0.0
+  samples: 12252
+  samples_used: 12252
+  samples_within_k: 10410
+  rms_residual_before: 0.3560767388454688
+  rms_residual_after: 0.12391047924524812
+  Fc_gazebo: 0.3
+  Fv_gazebo: 0.02

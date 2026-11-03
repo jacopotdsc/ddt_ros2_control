@@ -1,0 +1,8 @@
+# Settings of scripts/identification.py (not a ROS parameter file: friction_test_node does not read it).
+# Command-line options, when given, override these values.
+
+# Keep one sample every N for the fit (the paper: "downsampled by a factor of 10"). 1 = all samples.
+downsample: 1
+# Largest number of samples per test file (their pointNumber, ds = ceil(n / max_points_per_test));
+# null = no limit (all samples). If both are set, max_points_per_test wins.
+max_points_per_test: null

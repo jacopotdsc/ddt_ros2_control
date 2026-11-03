@@ -110,7 +110,7 @@ python3 src/mpx/tests/check_gazebo_feedback.py --seconds 30
 
 It checks standing height, finite torque, applied/held effort and pause/resume.
 Results default to `/tmp/mpx-feedback-check.json`. See
-[MPX_INTEGRATION_REPORT.md](MPX_INTEGRATION_REPORT.md) for measured timings,
+[MPX_INTEGRATION_REPORT.md](../md_files/MPX_INTEGRATION_REPORT.md) for measured timings,
 previous integration problems, corrections and remaining limitations.
 
 Gazebo GUI defaults to **20 FPS** and **nice 10**, keeping CPU priority for

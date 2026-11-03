@@ -3,7 +3,8 @@
 // command/cmd_key at 100 Hz following the FSM state), plus the trajectories:
 //   0  idle      FSM idle (safety), always available
 //   1  joint_pd  FSM joint_cmd + ramp to the default pose, then hold it; always available
-//   2-9          tests, one joint each (generate_joint_trajectory), only while holding the default pose
+//   2-9          tests, one joint each (generate_joint_trajectory: smooth back-and-forth strokes for the legs,
+//                speed steps for the wheels), only while holding the default pose
 //   t            every test in sequence, 3 s of joint_pd between two tests
 // Commands go to tita_rl_controller, FSM state joint_cmd, on command/joint_cmd (per joint
 // [q_des, dq_des, tau_ff, kp, kd]). Do not run keyboard_controller at the same time: both publish
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -68,8 +70,7 @@ public:
   explicit FrictionTestNode(const rclcpp::NodeOptions & options);
 
   // Trajectory of joint_name from its held position and back, for friction identification.
-  JointTrajectory generate_joint_trajectory(
-    const std::string & joint_name, double q_lim_low, double q_lim_high, double dq_max);
+  JointTrajectory generate_joint_trajectory(const std::string & joint_name, double q_lim_low, double q_lim_high);
 
 private:
   enum class Mode { ZERO, WAIT_JOINT_CMD, RAMP, HOLD, TEST };
@@ -101,11 +102,15 @@ private:
   std::string csv_dir_;
   std::vector<double> speed_fractions_;
   int sweeps_per_level_;
-  double acc_max_leg_, acc_max_wheel_, wheel_hold_time_, pause_time_, chirp_time_, chirp_f0_,
-    chirp_f1_, approach_speed_;
+  std::vector<double> acc_fractions_;  // legs: levels of peak acceleration, fractions of acc_max_
+  // test range per joint (yaml), inside the URDF limits: legs positions [rad], wheels speeds [rad/s]
+  std::vector<double> lower_bound_, upper_bound_;
+  double wheel_hold_time_, pause_time_;
   std::map<char, std::vector<std::string>> tests_;        // key -> joints moved together
-  std::map<std::string, double> dq_max_;                    // joint -> test speed
+  std::map<std::string, double> acc_max_;  // joint -> peak acceleration (legs: strokes, wheels: speed ramps)
+  std::string trajectory_info_;                             // levels of the last generated trajectory
   std::map<std::string, std::array<double, 2>> joint_limits_;  // joint -> URDF [lower, upper]
+  std::map<std::string, double> joint_velocity_limits_;        // joint -> URDF velocity limit
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_goal_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_command_publisher_;
@@ -126,6 +131,8 @@ private:
   char test_key_{0};
   double test_t0_{0.};
   std::map<size_t, JointTrajectory> test_;  // joint index -> trajectory
+  // Completed tests own their data while a worker writes them; control never waits for disk I/O.
+  std::deque<std::future<std::vector<std::string>>> csv_jobs_;
   // per joint: command of this tick [q_des, dq_des, tau_ff, kp, kd] and its trajectory info
   std::vector<std::array<double, 5>> cmd_;
   std::vector<std::tuple<double, int, uint8_t>> cmd_info_;  // ddq_des, speed level, segment

@@ -7,6 +7,8 @@ damping); the test node (friction_trajectory_node.py), started by hand, drives t
 
   ros2 launch friction_test friction_estimate.launch.py              # robot_friction.xacro
   ros2 launch friction_test friction_estimate.launch.py friction:=false   # robot.xacro, no friction
+  ros2 launch friction_test friction_estimate.launch.py noise:=true       # sensor noise measured on the real robot
+Sensor noise (noise:=true): values of tita_description/xacro/sensor_noise.xacro, applied by the Gazebo bridge.
 """
 import os
 import sys
@@ -22,11 +24,12 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def expand(xacro_path):
+def expand(xacro_path, noise="false"):
     """Expanded URDF, as sim_gazebo.launch.py (tita_rl_controller and its controllers.yaml)."""
     description = xacro.process_file(
         xacro_path,
-        mappings={"hw_env": "gazebo", "sim_env": "gazebo", "ctrl_mode": "wbc", "yaml_path": "gazebo_bridge"},
+        mappings={"hw_env": "gazebo", "sim_env": "gazebo", "ctrl_mode": "wbc", "yaml_path": "gazebo_bridge",
+                  "sensor_noise": noise},
     ).toxml()
     description = description.replace(
         "package://tita_description", "file://" + get_package_share_directory("tita_description"))
@@ -40,7 +43,10 @@ def launch_setup(context, *args, **kwargs):
     share = get_package_share_directory("friction_test")
     friction = LaunchConfiguration("friction").perform(context).lower() == "true"
     xacro_path = os.path.join(share, "urdf", "robot_friction.xacro" if friction else "robot.xacro")
-    robot_description = expand(xacro_path)
+    noise = LaunchConfiguration("noise").perform(context).lower()
+    if noise not in ("true", "false"):
+        raise RuntimeError(f"noise:={noise}: use true or false")
+    robot_description = expand(xacro_path, noise)
     fd, urdf_path = tempfile.mkstemp(prefix="tita_friction_test_", suffix=".urdf")
     with os.fdopen(fd, "w") as f:
         f.write(robot_description)
@@ -49,10 +55,11 @@ def launch_setup(context, *args, **kwargs):
     world_file = os.path.join(get_package_share_directory("gazebo_bridge"), "worlds", "empty_world.world")
     gazebo_ros_launch = os.path.join(get_package_share_directory("gazebo_ros"), "launch")
     nodes = [
-        launch.actions.LogInfo(msg=f"friction_test: Gazebo simulates {xacro_path} (hung)"),
+        launch.actions.LogInfo(msg=f"friction_test: Gazebo simulates {xacro_path} (hung), sensor noise {noise}"),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(gazebo_ros_launch, "gzserver.launch.py")),
-            launch_arguments={"world": world_file, "pause": "false", "verbose": "false"}.items(),
+            launch_arguments={"world": world_file, "pause": "false", "verbose": "false",
+                              "params_file": os.path.join(share, "config", "gazebo.yaml")}.items(),
         ),
     ]
     if LaunchConfiguration("gui").perform(context).lower() == "true":
@@ -101,5 +108,8 @@ def generate_launch_description():
             "friction", default_value="true",
             description="true: robot_friction.xacro (joint friction), false: robot.xacro (none)"),
         launch.actions.DeclareLaunchArgument("gui", default_value="true", description="Start gzclient"),
+        launch.actions.DeclareLaunchArgument(
+            "noise", default_value="false",
+            description="true: sensor noise of the Gazebo bridge, as measured on the real robot"),
         OpaqueFunction(function=launch_setup),
     ])
