@@ -39,7 +39,7 @@ struct FSMStateList
   FSMState_TransformUp * transformUp;
   FSMState_JointPD * jointPD;
   FSMState_TransformDown * transformDown;
-  std::vector<FSMState *> rlLists;
+  FSMState_RL * rlFlat;
 
   void deletePtr()
   {
@@ -50,11 +50,7 @@ struct FSMStateList
     delete transformUp;
     delete jointPD;
     delete transformDown;
-    // delete rl;
-    for (auto ptr : rlLists) {
-      delete ptr;
-    }
-    rlLists.clear();
+    delete rlFlat;
   }
 };
 

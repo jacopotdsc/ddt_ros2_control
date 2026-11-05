@@ -486,7 +486,6 @@ void RlController::update_control_parameters()
   get_node()->get_parameter<std::vector<long int>>("wheel_indices", param->wheel_indices);
   get_node()->get_parameter<std::vector<long int>>("hip_indices", param->hip_indices);
   get_node()->get_parameter<std::vector<scalar_t>>("torque_limit", param->torque_limit);
-  get_node()->get_parameter<std::vector<std::string>>("rl_policy_names", param->rl_policy_names);
 
   // TransformUpParameters
   auto & rs_params = controlData_->params->transform_up_params;
@@ -554,11 +553,8 @@ void RlController::update_control_parameters()
     get_node()->get_parameter<std::vector<scalar_t>>(policy_name + ".re_sign", rl_params.re_sign);
   };
 
-  for (auto policy_name : param->rl_policy_names) {
-    auto rl_params = RLParameters();
-    get_policy_params(policy_name, rl_params);
-    param->rl_params.push_back(rl_params);
-  }
+  get_policy_params("rl_flat", param->rl_flat_params);
+  get_policy_params("rl_residual", param->rl_residual_params);
   // clang-format on
   RCLCPP_INFO(get_node()->get_logger(), "Parameters were updated");
 }

@@ -146,15 +146,9 @@ void TeleopCmdNode::fsm_goal_cb()
 
     if (joy_msg_->axes[4] == -1) {
       if (joy_msg_->axes[5] == 0 || joy_msg_->axes[5] == -1) {
-        msg.data = "rl_0";
+        msg.data = "rl_flat";
         if (joy_msg_->axes[6] == -1) {
           msg.data = "jump";
-        } else if (joy_msg_->buttons[2] == 1) {
-          msg.data = "rl_1";
-        } else if (joy_msg_->buttons[3] == 1) {
-          msg.data = "rl_2";
-        } else if (joy_msg_->buttons[4] == 1) {
-          msg.data = "rl_3";
         }
       }
     }

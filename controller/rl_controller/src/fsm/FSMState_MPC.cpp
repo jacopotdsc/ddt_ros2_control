@@ -57,13 +57,10 @@ std::string FSMState_MPC::checkTransition()
   if (stale_) return "transform_down";
   // residual: MPX command plus the network offset (same MPX, no handoff).
   if (command == "residual") return "residual";
-  // For rl_N and transform_down MPX first lowers the robot to h_rl at rest, then
+  // For rl_flat and transform_down MPX first lowers the robot to h_rl at rest, then
   // publishes the handed-off mode.
   std::lock_guard<std::mutex> lock(_data->mpc_command.mutex);
   if (_data->mpc_command.handoff != command) return "mpc";
-  if (command == "transform_down") return command;
-  for (size_t i = 0; i < _data->params->rl_policy_names.size(); ++i) {
-    if (command == "rl_" + std::to_string(i)) return _data->params->rl_policy_names[i];
-  }
+  if (command == "transform_down" || command == "rl_flat") return command;
   return "mpc";
 }

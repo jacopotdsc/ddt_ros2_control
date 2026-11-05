@@ -71,15 +71,8 @@ std::string FSMState_JointPD::checkTransition()
   if (desire_state == "mpc" && FSMState_MPC::ready(_data)) {
     return "mpc";
   }
-  if (desire_state.find("rl_") == 0) {
-    try {
-      size_t number = std::stoi(desire_state.substr(3));
-      if (number < _data->params->rl_policy_names.size()) {
-        this->_nextStateName = _data->params->rl_policy_names[number];
-      }
-    } catch (const std::exception & e) {
-      std::cerr << "Invalid number format in " << desire_state << std::endl;
-    }
+  if (desire_state == "rl_flat") {
+    this->_nextStateName = "rl_flat";
   } else if (desire_state == "idle") {  // normal c
     this->_nextStateName = "idle";
   } else if (desire_state == "transform_down") {

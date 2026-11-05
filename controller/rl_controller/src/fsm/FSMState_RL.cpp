@@ -24,11 +24,11 @@
 #endif
 
 FSMState_RL::FSMState_RL(
-  std::shared_ptr<ControlFSMData> data, RLParameters * rl_params, std::string stateName)
-: FSMState(data, stateName)
+  std::shared_ptr<ControlFSMData> data, RLParameters * rl_params)
+: FSMState(data, "rl_flat")
 {
   rl_params_ = rl_params;
-  printf("Get policy: %s in \"%s\" fsm\n", rl_params_->policy_path.c_str(), stateName.c_str());
+  printf("Get policy: %s in \"%s\" fsm\n", rl_params_->policy_path.c_str(), _stateName.c_str());
 #ifdef USE_ENGINE
   // printf("Use TensorRT engine\n");
   inferrer_ = std::make_unique<EngineInferrer>();
@@ -138,15 +138,8 @@ std::string FSMState_RL::checkTransition()
   if (desiredState == "mpc" && FSMState_MPC::ready(_data)) {
     return "mpc";
   }
-  if (desiredState.find("rl_") == 0) {
-    try {
-      size_t number = std::stoi(desiredState.substr(3));
-      if (number < _data->params->rl_policy_names.size()) {
-        this->_nextStateName = _data->params->rl_policy_names[number];
-      }
-    } catch (const std::exception & e) {
-      std::cerr << "Invalid number format in " << desiredState << std::endl;
-    }
+  if (desiredState == "rl_flat") {
+    this->_nextStateName = "rl_flat";
   } else if (desiredState == "transform_down") {
     this->_nextStateName = "transform_down";
   } else if (desiredState == "idle") {

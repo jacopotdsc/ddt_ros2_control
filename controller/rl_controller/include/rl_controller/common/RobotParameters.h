@@ -114,9 +114,8 @@ struct RobotControlParameters
   TransformDownParameters transform_down_params;
   JointPDParameters joint_pd_params;
   MpcParameters mpc_params;
-  std::vector<RLParameters> rl_params;
-
-  std::vector<std::string> rl_policy_names;
+  RLParameters rl_flat_params;      // yaml block rl_flat: state and command "rl_flat"
+  RLParameters rl_residual_params;  // yaml block rl_residual: network of the residual state
   std::string rl_policy_jump_name;
   bool locomotion_use_lqr{false};
 };

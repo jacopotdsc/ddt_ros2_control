@@ -66,7 +66,7 @@
     mpc_rl_handoff:
       h_mpc: 0.4                    # m, COM height MPX drives to on every "mpc" activation
       h_rl: 0.28                    # m, COM height handed to RL or to the fold (= h_min of config_tita.py)
-      rl_modes: ["rl_0"]            # RL modes MPX hands off to: one per rl_policy_names entry
+      rl_modes: ["rl_flat"]         # RL modes MPX hands off to: the RL state of the FSM
                                     # of rl_controller (others are ignored, like the FSM does)
       height_tol: 0.03              # m, |COM z - handoff height|
       vz_tol: 0.05                  # m/s, |COM vz|

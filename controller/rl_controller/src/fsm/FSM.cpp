@@ -16,17 +16,15 @@
 
 #include <iostream>
 
-#include "rl_controller/fsm/FSMState_RLPPO.h"
-
 FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
 {
   _stateList.mpc = new FSMState_MPC(_data);
-  _stateList.residual = new FSMState_Residual(_data);
+  _stateList.residual = new FSMState_Residual(_data, &_data->params->rl_residual_params);
   _stateList.passive = new FSMState_Passive(_data);
-  // _stateList.balanceStand = new FSMState_BalanceStand(_data);
   _stateList.transformUp = new FSMState_TransformUp(_data);
   _stateList.jointPD = new FSMState_JointPD(_data);
   _stateList.transformDown = new FSMState_TransformDown(_data);
+  _stateList.rlFlat = new FSMState_RL(_data, &_data->params->rl_flat_params);
   // _stateList.rlHopturn = new FSMState_RL_Hopturn(_data, &_data->params->rl_hopturn_params, "hopturn");
   _stateMap = {
     {"idle", _stateList.passive},
@@ -36,22 +34,10 @@ FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
     {"transform_up", _stateList.transformUp},
     {"joint_pd", _stateList.jointPD},
     {"transform_down", _stateList.transformDown},
+    {"rl_flat", _stateList.rlFlat},
     // {"hopturn", _stateList.rlHopturn}
   };
 
-  for (size_t i = 0; i < _data->params->rl_params.size(); i++) {
-    auto policy_name = _data->params->rl_policy_names[i];
-    FSMState * rl_fsm;
-    if (_data->params->rl_params[i].policy_type == "ppo") {
-      rl_fsm = new FSMState_RLPPO(_data, &_data->params->rl_params[i], policy_name);
-    } else if (_data->params->rl_params[i].policy_type == "np3o") {
-      rl_fsm = new FSMState_RL(_data, &_data->params->rl_params[i], policy_name);
-    } else {
-      throw std::runtime_error("RL policy type not supported");
-    }
-    _stateList.rlLists.push_back(rl_fsm);
-    _stateMap.insert({policy_name, rl_fsm});
-  }
   std::cout << "All avaliable FSM states:" << std::endl;
   for (const auto & pair : _stateMap) {
     std::cout << "\t\t" << pair.first << std::endl;

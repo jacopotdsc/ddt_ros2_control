@@ -2,7 +2,7 @@
 #include <algorithm>
 
 const std::vector<std::pair<char, std::string>> KeyboardControllerNode::fsm_state_mapping = {
-{'0', "rl_0"}, {'1', "rl_1"}, {'2', "rl_2"},         {'3', "rl_3"},           {'4', "mpc"},
+  {'0', "rl_flat"}, {'4', "mpc"},
   {'5', "residual"}, {'6', "idle"}, {'7', "transform_up"}, {'8', "transform_down"}, {'9', "joint_pd"}};
 
 KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & options)
@@ -40,7 +40,7 @@ KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & optio
       }
       // The keyboard mode always follows the FSM state it sees, whoever caused the change
       // (MPX stopped -> transform_down, end of the fold -> idle, command_watchdog, another
-      // command source). RL states carry the policy name (e.g. rl_flat): rl_N is kept.
+      // command source).
       const auto & state = msg->data;
       const bool known = std::any_of(
         fsm_state_mapping.begin(), fsm_state_mapping.end(),
@@ -193,7 +193,6 @@ void KeyboardControllerNode::ReadKeyThread()
       [key](const auto & pair) { return pair.first == key; });
     if (mode != fsm_state_mapping.end()) {
       const std::string & goal = mode->second;
-      // The FSM may still be in mpc after another key (e.g. an unknown rl_N).
       // residual runs on MPX too (MPX command + network offset): same as mpc here.
       const std::string fsm_state = FsmState();
       const bool in_mpc = fsm_state == "mpc" || fsm_state == "residual";
@@ -208,8 +207,8 @@ void KeyboardControllerNode::ReadKeyThread()
         twist_ = geometry_msgs::msg::Twist();
         pose_.pose.position.z = MPC_START_HEIGHT;
         mpx_keys_locked_ = mpx_running;
-      } else if ((goal.rfind("rl_", 0) == 0 || goal == "transform_down") && from_mpc) {
-        // rl_N and transform_down: MPX stops the robot and lowers it before handing off
+      } else if ((goal == "rl_flat" || goal == "transform_down") && from_mpc) {
+        // rl_flat and transform_down: MPX stops the robot and lowers it before handing off
         // (keys stay locked meanwhile).
         twist_ = geometry_msgs::msg::Twist();
       } else if (goal != "mpc" && goal != "residual") {
@@ -375,7 +374,7 @@ void KeyboardControllerNode::CheckRlControllerAlive()
     }
   }
   if (rl_controller_seen_ && !alive && fsm_goal_.data != "idle") {
-    // A restarted controller must not receive the old mode (e.g. rl_0 or mpc).
+    // A restarted controller must not receive the old mode (e.g. rl_flat or mpc).
     fsm_goal_.data = "idle";
     mpx_keys_locked_ = false;
     print_interface();

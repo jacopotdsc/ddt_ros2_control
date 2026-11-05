@@ -19,8 +19,8 @@
 #include "rl_controller/common/timeMarker.h"
 
 FSMState_RLPPO::FSMState_RLPPO(
-  std::shared_ptr<ControlFSMData> data, RLParameters * rl_params, std::string stateName)
-: FSMState_RL(data, rl_params, stateName)
+  std::shared_ptr<ControlFSMData> data, RLParameters * rl_params)
+: FSMState_RL(data, rl_params)
 {
 }
 

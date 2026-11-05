@@ -56,8 +56,7 @@ struct Observations
 class FSMState_RL : public FSMState
 {
 public:
-  FSMState_RL(
-    std::shared_ptr<ControlFSMData> data, RLParameters * rl_params, std::string stateName);
+  FSMState_RL(std::shared_ptr<ControlFSMData> data, RLParameters * rl_params);
   virtual ~FSMState_RL() {}
 
   // Behavior to be carried out when entering a state
