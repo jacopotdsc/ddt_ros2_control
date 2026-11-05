@@ -21,6 +21,7 @@
 FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
 {
   _stateList.mpc = new FSMState_MPC(_data);
+  _stateList.residual = new FSMState_Residual(_data);
   _stateList.passive = new FSMState_Passive(_data);
   // _stateList.balanceStand = new FSMState_BalanceStand(_data);
   _stateList.transformUp = new FSMState_TransformUp(_data);
@@ -30,6 +31,7 @@ FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
   _stateMap = {
     {"idle", _stateList.passive},
     {"mpc", _stateList.mpc},
+    {"residual", _stateList.residual},
     // {FSMStateName::BALANCE_STAND, nullptr},
     {"transform_up", _stateList.transformUp},
     {"joint_pd", _stateList.jointPD},

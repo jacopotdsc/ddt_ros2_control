@@ -125,7 +125,7 @@ void KeyboardControllerNode::print_interface()
     std::cout << "  (FSM: " << fsm_state << ")";
   }
   std::cout << std::endl;
-  if (fsm_goal_.data == "mpc" && !MpxRunning()) {
+  if ((fsm_goal_.data == "mpc" || fsm_goal_.data == "residual") && !MpxRunning()) {
     std::cout << RED << "  MPX NOT RUNNING: MPC unavailable, the current state stays active"
               << RESET << std::endl;
   }
@@ -194,10 +194,14 @@ void KeyboardControllerNode::ReadKeyThread()
     if (mode != fsm_state_mapping.end()) {
       const std::string & goal = mode->second;
       // The FSM may still be in mpc after another key (e.g. an unknown rl_N).
-      const bool in_mpc = FsmState() == "mpc";
-      const bool from_mpc = fsm_goal_.data == "mpc" || in_mpc;
-      // The FSM never leaves mpc for these modes: keep showing mpc.
-      if (in_mpc && (goal == "transform_up" || goal == "residual")) continue;
+      // residual runs on MPX too (MPX command + network offset): same as mpc here.
+      const std::string fsm_state = FsmState();
+      const bool in_mpc = fsm_state == "mpc" || fsm_state == "residual";
+      const bool from_mpc = fsm_goal_.data == "mpc" || fsm_goal_.data == "residual" || in_mpc;
+      // The FSM never leaves mpc/residual for transform_up: keep showing the current mode.
+      if (in_mpc && goal == "transform_up") continue;
+      // residual is entered only from mpc (or kept from residual).
+      if (goal == "residual" && !in_mpc) continue;
       if (goal == "mpc" && !from_mpc) {
         // MPX starts at rest and ramps to h_mpc: mirror it and lock the motion keys
         // until MPX releases them.
@@ -208,7 +212,7 @@ void KeyboardControllerNode::ReadKeyThread()
         // rl_N and transform_down: MPX stops the robot and lowers it before handing off
         // (keys stay locked meanwhile).
         twist_ = geometry_msgs::msg::Twist();
-      } else if (goal != "mpc") {
+      } else if (goal != "mpc" && goal != "residual") {
         mpx_keys_locked_ = false;
       }
       fsm_goal_.data = goal;

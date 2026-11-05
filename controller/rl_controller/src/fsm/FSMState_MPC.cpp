@@ -55,6 +55,8 @@ std::string FSMState_MPC::checkTransition()
   if (command == "idle" || command == "joint_pd") return command;
   // No MPX command for mpc.command_timeout: fold now, without waiting for the MPX handoff.
   if (stale_) return "transform_down";
+  // residual: MPX command plus the network offset (same MPX, no handoff).
+  if (command == "residual") return "residual";
   // For rl_N and transform_down MPX first lowers the robot to h_rl at rest, then
   // publishes the handed-off mode.
   std::lock_guard<std::mutex> lock(_data->mpc_command.mutex);

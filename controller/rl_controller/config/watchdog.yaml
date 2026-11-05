@@ -5,7 +5,7 @@
     # FSM states where every case below is checked: MPX and the RL policies (rl_policy_names of
     # controllers.yaml). Elsewhere (idle, transform_up stand-up, transform_down, joint_pd) the
     # watchdog requests nothing: 2026-10-28, it stopped the stand-up on the robot.
-    active_states: [mpc, rl_flat]
+    active_states: [mpc, rl_flat, residual]
     # No twist on command/cmd_twist for this long (s) -> transform_down, at every tick.
     timeout: 5.0
     # Body IMU (imu_sensor_broadcaster/imu) -> idle, once when exceeded.

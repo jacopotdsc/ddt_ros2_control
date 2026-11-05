@@ -436,7 +436,7 @@ void RlController::fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg)
     if (msg->data == "mpc") {
       RCLCPP_INFO(get_node()->get_logger(), "MPC requested: waiting for compilation/valid MPX torque; current state remains active. No timeout.");
     } else if (msg->data == "residual") {
-      RCLCPP_WARN(get_node()->get_logger(), "Residual mode is not implemented; keeping current state.");
+      RCLCPP_INFO(get_node()->get_logger(), "residual requested: entered only from mpc.");
     }
   }
   cmd->fsm_name_ = msg->data;
