@@ -10,6 +10,11 @@ void FSMState_MPC::run()
   // keep the previous low-level command for this tick.
   std::unique_lock<std::mutex> lock(_data->mpc_command.mutex, std::try_to_lock);
   if (!lock.owns_lock()) return;
+  compute(start);
+}
+
+bool FSMState_MPC::compute(std::chrono::steady_clock::time_point start)
+{
   auto & mpc = _data->mpc_command;
   const auto & effort = mpc.effort;
   const auto & kp = _data->params->mpc_params.joint_kp;
@@ -29,9 +34,9 @@ void FSMState_MPC::run()
     _data->low_cmd->zero();
     for (int i = 0; i < _data->low_cmd->kd.size(); i++) _data->low_cmd->kd(i) = 5;
     for (auto i : _data->params->wheel_indices) _data->low_cmd->kd(i) = 0;
-    return;
+    return false;
   }
-  if (!mpc.valid) return;
+  if (!mpc.valid) return false;
   _data->low_cmd->zero();
   // PD around the WBC feedforward on this cycle's joints (read just before run()),
   // computed here rather than in the hardware bridge so torque_limit bounds the total.
@@ -46,6 +51,7 @@ void FSMState_MPC::run()
     mpc.run_us.push_back(
       std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
   }
+  return true;
 }
 
 std::string FSMState_MPC::checkTransition()

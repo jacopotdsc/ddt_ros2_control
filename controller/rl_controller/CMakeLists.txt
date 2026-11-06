@@ -64,6 +64,10 @@ endif()
 # Robot-side safety watchdog: requests idle / transform_down (src/command_watchdog.cpp).
 ament_auto_add_executable(command_watchdog NO_TARGET_LINK_LIBRARIES src/command_watchdog.cpp)
 
+# Residual network node: publishes the torque offset for the FSM state residual (src/residual_node.cpp).
+ament_auto_add_executable(residual_node NO_TARGET_LINK_LIBRARIES src/residual_node.cpp src/inferrer/onnx_inferrer.cpp)
+target_link_libraries(residual_node onnxruntime)
+
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

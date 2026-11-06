@@ -38,6 +38,9 @@ inline const std::string mpx_joint_command = "mpx/joint_command";  // WBC: tau_f
 inline const std::string mpx_handoff = "mpx/handoff";
 inline const std::string mpx_keys_locked = "mpx/keys_locked";
 
+// residual network
+inline const std::string residual_joint_command = "residual/joint_command";
+
 }  // namespace ros_topic
 
 #endif  // ROS_UTILS__TOPIC_NAMES_HPP_

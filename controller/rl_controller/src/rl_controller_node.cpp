@@ -80,6 +80,9 @@ controller_interface::CallbackReturn RlController::on_configure(
   mpc_subscription_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
     ros_topic::mpx_joint_command, rclcpp::QoS(1).best_effort(),
     [this](const sensor_msgs::msg::JointState::SharedPtr msg) { mpc_joint_command_cb(*msg); });
+  residual_subscription_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
+    ros_topic::residual_joint_command, rclcpp::QoS(1).best_effort(),
+    [this](const sensor_msgs::msg::JointState::SharedPtr msg) { residual_command_cb(*msg); });
   mpc_handoff_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
     ros_topic::mpx_handoff, rclcpp::QoS(1),
     [this](const std_msgs::msg::String::SharedPtr msg) {
@@ -425,6 +428,57 @@ void RlController::mpc_joint_command_cb(const sensor_msgs::msg::JointState & msg
   mpc_stats_start_ = now;
 }
 
+void RlController::residual_command_cb(const sensor_msgs::msg::JointState & msg)
+{
+  // Residual network offset (residual_node): effort only, matched by joint name.
+  const auto n = joint_names_.size();
+  std::vector<double> tau(n);
+  bool ok = msg.name.size() == msg.effort.size();
+  for (size_t i = 0; ok && i < n; ++i) {
+    auto it = std::find(msg.name.begin(), msg.name.end(), joint_names_[i]);
+    if (it == msg.name.end()) {
+      ok = false;
+      break;
+    }
+    tau[i] = msg.effort[std::distance(msg.name.begin(), it)];
+    ok = std::isfinite(tau[i]);
+  }
+  if (!ok) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
+      "Invalid residual command ignored.");
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  bool active;
+  {
+    std::lock_guard<std::mutex> lock(controlData_->residual_command.mutex);
+    controlData_->residual_command.tau = std::move(tau);
+    controlData_->residual_command.received = now;
+    active = controlData_->residual_command.active;
+  }
+  // Rate of the offsets received while the state residual is active, logged every 5 s.
+  // The window restarts after a pause (residual_node publishes only in the state residual).
+  if (!active) {
+    residual_stats_count_ = 0;
+    return;b
+  }
+  if (residual_stats_count_ == 0 || now - residual_last_ > std::chrono::seconds(1)) {
+    residual_stats_count_ = 0;
+    residual_stats_start_ = residual_last_ = now;
+    residual_max_gap_ms_ = 0.0;
+  }
+  residual_max_gap_ms_ = std::max(
+    residual_max_gap_ms_, std::chrono::duration<double, std::milli>(now - residual_last_).count());
+  residual_last_ = now;
+  ++residual_stats_count_;
+  const double elapsed = std::chrono::duration<double>(now - residual_stats_start_).count();
+  if (elapsed < 5.0) return;
+  RCLCPP_INFO(get_node()->get_logger(),
+    "Residual low level: offsets received %.1f Hz (%zu in %.1f s), max gap %.1f ms",
+    (residual_stats_count_ - 1) / elapsed, residual_stats_count_ - 1, elapsed, residual_max_gap_ms_);
+  residual_stats_count_ = 0;
+}
+
 void RlController::fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(fsm_goal_mutex_);
@@ -554,7 +608,7 @@ void RlController::update_control_parameters()
   };
 
   get_policy_params("rl_flat", param->rl_flat_params);
-  get_policy_params("rl_residual", param->rl_residual_params);
+  get_node()->get_parameter<scalar_t>("residual.command_timeout", param->residual_params.command_timeout);
   // clang-format on
   RCLCPP_INFO(get_node()->get_logger(), "Parameters were updated");
 }

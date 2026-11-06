@@ -19,7 +19,7 @@
 FSM::FSM(std::shared_ptr<ControlFSMData> data) : _data(data)
 {
   _stateList.mpc = new FSMState_MPC(_data);
-  _stateList.residual = new FSMState_Residual(_data, &_data->params->rl_residual_params);
+  _stateList.residual = new FSMState_Residual(_data, _stateList.mpc);
   _stateList.passive = new FSMState_Passive(_data);
   _stateList.transformUp = new FSMState_TransformUp(_data);
   _stateList.jointPD = new FSMState_JointPD(_data);

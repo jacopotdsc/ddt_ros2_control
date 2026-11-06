@@ -15,6 +15,7 @@
 #ifndef RL_CONTROLLER__FSM__FSMSTATE_RL_H_
 #define RL_CONTROLLER__FSM__FSMSTATE_RL_H_
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <thread>
@@ -57,7 +58,12 @@ class FSMState_RL : public FSMState
 {
 public:
   FSMState_RL(std::shared_ptr<ControlFSMData> data, RLParameters * rl_params);
-  virtual ~FSMState_RL() {}
+  virtual ~FSMState_RL()
+  {
+    // Stop the inference thread: destroying a joinable std::thread calls std::terminate.
+    threadRunning = false;
+    if (forward_thread.joinable()) forward_thread.join();
+  }
 
   // Behavior to be carried out when entering a state
   void enter();
@@ -117,8 +123,8 @@ protected:
 
   std::unique_ptr<InferrerBase> inferrer_;
   std::thread forward_thread;
-  bool threadRunning;
-  bool stop_update_ = false;
+  std::atomic<bool> threadRunning{false};
+  std::atomic<bool> stop_update_{false};
   bool thread_first_ = true;
 
 private:

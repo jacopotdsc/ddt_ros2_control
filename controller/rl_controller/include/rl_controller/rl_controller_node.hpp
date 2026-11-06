@@ -88,6 +88,7 @@ protected:
   void fsm_goal_cb(const std_msgs::msg::String::SharedPtr msg);
   void watchdog_mode_cb(const std_msgs::msg::String::SharedPtr msg);
   void mpc_joint_command_cb(const sensor_msgs::msg::JointState & msg);
+  void residual_command_cb(const sensor_msgs::msg::JointState & msg);
   void joy_cb(const sensor_msgs::msg::Joy::SharedPtr msg);
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscription_;
@@ -97,6 +98,11 @@ protected:
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mpc_handoff_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr mpc_subscription_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr residual_subscription_;
+  
+  size_t residual_stats_count_ = 0;
+  std::chrono::steady_clock::time_point residual_stats_start_{}, residual_last_{};
+  double residual_max_gap_ms_ = 0.0;
   rclcpp::Time mpc_stats_start_{0, 0, RCL_ROS_TIME}, mpc_last_command_{0, 0, RCL_ROS_TIME};
   std::atomic<int64_t> last_update_ns_{0};
   // Current FSM state, published on change (MPX knows whether its torque is applied).

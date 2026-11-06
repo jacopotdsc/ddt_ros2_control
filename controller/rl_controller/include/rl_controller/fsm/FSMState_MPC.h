@@ -1,5 +1,8 @@
 #ifndef RL_CONTROLLER__FSM__FSMSTATE_MPC_H_
 #define RL_CONTROLLER__FSM__FSMSTATE_MPC_H_
+#include <chrono>
+#include <mutex>
+
 #include "FSMState.h"
 
 class FSMState_MPC : public FSMState
@@ -15,6 +18,8 @@ public:
     std::lock_guard<std::mutex> lock(data->mpc_command.mutex);
     return data->mpc_command.valid;
   }
+
+  bool compute(std::chrono::steady_clock::time_point start);
 
 private:
   bool stale_ = false;  // no MPX command for params->mpc_params.command_timeout
