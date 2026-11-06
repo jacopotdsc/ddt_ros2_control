@@ -51,12 +51,10 @@ class Solver:
         self._command = (0., 0., 0., height)
         self.model, self.config = model_from_description(description, config)
         if mpc_frequency > 0:
-            # The warm start shifts the previous solution by one MPC period.
-            shift = 1. / (mpc_frequency * self.config.dt_mpc)
-            if not np.isfinite(shift) or abs(shift - round(shift)) > 1e-6 or not 1 <= round(shift) <= self.config.N:
-                raise ValueError('MPC period must span a whole number of prediction nodes within the horizon')
+            # The warm start shifts the previous solution by one MPC period (possibly a fraction
+            # of a node: interpolated in the wrapper, which also checks the value).
             self.config.mpc_frequency = mpc_frequency
-            self.config.mpc_shift_nodes = int(round(shift))
+            self.config.mpc_shift_nodes = 1. / (mpc_frequency * self.config.dt_mpc)
         self.data = mujoco.MjData(self.model)
         if mode_controlled:
             self.config.q0 = np.asarray(config.q0, dtype=float).copy()
@@ -158,7 +156,7 @@ class Solver:
         new_state = MPCState(
             sol=ControlSol(a=U[:, 0, 0], ac_z=U[:, 0, 1], alpha=U[:, 0, 2], grf=U[:, 0, 3:]),
             X0_shifted=shifted(X), U0_shifted=shifted(U), D0_shifted=shifted(D),
-            ref_rate=rates[:, mpc.shift],  # the next solve continues the reference from here
+            ref_rate=mpc.rate_ahead(rates),  # the next solve continues the reference from here
         )
         ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(U))
         return new_state, theta_prev, U[0], ok

@@ -14,8 +14,8 @@
     # C++ path: MPC publishes the plan; WBC holds U[0] and recomputes on fresh feedback
     # publishes tau_ff/q_des/qd_des; rl_controller (FSMState_MPC) tracks them with a joint PD.
     timing:
-      mpc_frequency: 40.0        # Hz; dt_mpc=25 ms, warm start shifts one whole node
-      wbc_frequency: 100.0       # Hz; reuses the latest U[0] between 40 Hz MPC plans
+      mpc_frequency: 50.0        # Hz; dt_mpc and N in config_tita.py; the warm start shifts by 1/(f*dt_mpc) nodes (interpolated)
+      wbc_frequency: 100.0       # Hz; reuses the latest U[0] between MPC plans
       # Wall-clock seconds since MPC's last active trajectory; expiry makes WBC
       # stop computing/publishing commands. It does not itself change the FSM mode.
       trajectory_timeout: 0.1
