@@ -460,7 +460,7 @@ void RlController::residual_command_cb(const sensor_msgs::msg::JointState & msg)
   // The window restarts after a pause (residual_node publishes only in the state residual).
   if (!active) {
     residual_stats_count_ = 0;
-    return;b
+    return;
   }
   if (residual_stats_count_ == 0 || now - residual_last_ > std::chrono::seconds(1)) {
     residual_stats_count_ = 0;
