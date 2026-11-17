@@ -49,8 +49,8 @@ ERROR_SOURCES = ("filter", "imu", "odom", "mpx")
 # Numeric codes of the FSM states, to plot them next to the signals
 FSM_CODES = {
     "idle": 0, "transform_down": 1, "transform_up": 2, "joint_pd": 3,
-    "rl_0": 4, "rl_flat": 4,  # TITA: key 0 = rl_0 runs the policy "rl_flat"
-    "rl_1": 5, "rl_2": 6, "rl_3": 7, "mpc": 8, "residual": 9, "jump": 10,
+    "rl_flat": 4,  # TITA: key 0
+    "mpc": 8, "residual": 9, "jump": 10,
 }
 
 

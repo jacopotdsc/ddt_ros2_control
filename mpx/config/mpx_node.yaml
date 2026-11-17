@@ -13,9 +13,9 @@
 
     # C++ path: MPC publishes the plan; WBC holds U[0] and recomputes on fresh feedback
     # publishes tau_ff/q_des/qd_des; rl_controller (FSMState_MPC) tracks them with a joint PD.
+    # MPC and WBC frequencies: only in config_tita.py (mpc_frequency, whole_body_frequency);
+    # the nodes read them from the solver and print them at startup.
     timing:
-      mpc_frequency: 40.0        # Hz; dt_mpc=25 ms, warm start shifts one whole node
-      wbc_frequency: 100.0       # Hz; reuses the latest U[0] between 40 Hz MPC plans
       # Wall-clock seconds since MPC's last active trajectory; expiry makes WBC
       # stop computing/publishing commands. It does not itself change the FSM mode.
       trajectory_timeout: 0.1
@@ -64,7 +64,7 @@
     # and releases control once it holds there (or after the timeout).
     # idle and joint_pd are the immediate safety commands: MPX goes to standby at once.
     mpc_rl_handoff:
-      h_mpc: 0.4                    # m, COM height MPX drives to on every "mpc" activation
+      h_mpc: 0.35                    # m, COM height MPX drives to on every "mpc" activation
       h_rl: 0.28                    # m, COM height handed to RL or to the fold (= h_min of config_tita.py)
       rl_modes: ["rl_flat"]         # RL modes MPX hands off to: the RL state of the FSM
                                     # of rl_controller (others are ignored, like the FSM does)

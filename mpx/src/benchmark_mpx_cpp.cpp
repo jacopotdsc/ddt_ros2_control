@@ -134,12 +134,13 @@ int benchmark_worker(py::object solver, double seconds, double mpc_hz, double wb
 }  // namespace
 
 int main(int argc, char **argv) {
-  double mpc_hz = 40., wbc_hz = 100., seconds = 20.;
+  // 0 = take the rate from config_tita.py (mpc_frequency / whole_body_frequency), like the nodes.
+  double mpc_hz = 0., wbc_hz = 0., seconds = 20.;
   for (int i = 1; i < argc; ++i) {
     std::string arg(argv[i]);
     if (arg == "--help") {
       std::cout << "benchmark_mpx_cpp [--seconds S] [--mpc-hz F] [--wbc-hz F]\n"
-                   "Defaults: 20 seconds, MPC 40 Hz, WBC 100 Hz.\n"
+                   "Defaults: 20 seconds; MPC/WBC rates from config_tita.py (flags override).\n"
                    "MPC and WBC always run in separate processes/interpreters, shared latest U[0].\n"
                    "Synthetic feedback, production backend, no ROS or motor output.\n";
       return 0;
@@ -214,7 +215,12 @@ int main(int argc, char **argv) {
     auto solver = py::module_::import("mpx_cpp_solver").attr("Solver")(
       description, true, 0.4, py::cpp_function([](const std::string &s) {
         std::cout << s << std::endl;
-      }), mpc_hz);
+      }));
+    // Same source as mpx_node_cpp / mpx_wbc_node: period_ns / wbc_period_ns from config_tita.py.
+    if (mpc_hz == 0.) mpc_hz = 1e9 / solver.attr("period_ns").cast<double>();
+    if (wbc_hz == 0.) wbc_hz = 1e9 / solver.attr("wbc_period_ns").cast<double>();
+    std::cout << (mpc_worker ? "MPC" : "WBC") << " rate: "
+              << (mpc_worker ? mpc_hz : wbc_hz) << " Hz" << std::endl;
     return benchmark_worker(solver, seconds, mpc_hz, wbc_hz);
   } catch (const std::exception &e) {
     std::cerr << "Benchmark failed: " << e.what() << '\n'; return 1;

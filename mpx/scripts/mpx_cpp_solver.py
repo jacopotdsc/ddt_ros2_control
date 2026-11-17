@@ -46,17 +46,13 @@ sys.setswitchinterval(5e-4)
 
 
 class Solver:
-    def __init__(self, description, mode_controlled, height, log, mpc_frequency=0.):
+    def __init__(self, description, mode_controlled, height, log):
         # log: logger callback of the C++ node (unused here, kept for its constructor call).
+        # Frequencies come only from config_tita.py (mpc_frequency, whole_body_frequency): the C++
+        # nodes read them back from period_ns / wbc_period_ns. The warm start shifts by
+        # 1/(mpc_frequency*dt_mpc) nodes (possibly fractional: interpolated in the wrapper).
         self._command = (0., 0., 0., height)
         self.model, self.config = model_from_description(description, config)
-        if mpc_frequency > 0:
-            # The warm start shifts the previous solution by one MPC period.
-            shift = 1. / (mpc_frequency * self.config.dt_mpc)
-            if not np.isfinite(shift) or abs(shift - round(shift)) > 1e-6 or not 1 <= round(shift) <= self.config.N:
-                raise ValueError('MPC period must span a whole number of prediction nodes within the horizon')
-            self.config.mpc_frequency = mpc_frequency
-            self.config.mpc_shift_nodes = int(round(shift))
         self.data = mujoco.MjData(self.model)
         if mode_controlled:
             self.config.q0 = np.asarray(config.q0, dtype=float).copy()
@@ -74,7 +70,8 @@ class Solver:
         self.mpc = BatchedMPCControllerWrapper(self.config, n_env=1, model=self.model)
         self.mpc_state = self.mpc.init_state()
         self.theta_prev = np.asarray(0., dtype=np.float64)
-        self.period_ns = round(1e9 / self.config.mpc_frequency)
+        self.period_ns = round(1e9 / self.config.mpc_frequency)  # MPC period (mpx_node_cpp)
+        self.wbc_period_ns = round(1e9 / self.config.whole_body_frequency)  # WBC period (mpx_wbc_node)
         self.joint_names = list(self.config.joints_name)
         self.effort_limits = np.asarray(self.config.effort_limits, dtype=float).tolist()
         self.nq, self.nv = self.model.nq, self.model.nv
@@ -155,7 +152,7 @@ class Solver:
         new_state = MPCState(
             sol=ControlSol(a=U[:, 0, 0], ac_z=U[:, 0, 1], alpha=U[:, 0, 2], grf=U[:, 0, 3:]),
             X0_shifted=shifted(X), U0_shifted=shifted(U), D0_shifted=shifted(D),
-            ref_rate=rates[:, mpc.shift],  # the next solve continues the reference from here
+            ref_rate=mpc.rate_ahead(rates),  # the next solve continues the reference from here
             integral=mpc_state.integral,
         )
         ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(U))
