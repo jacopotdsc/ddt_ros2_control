@@ -80,6 +80,7 @@ KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & optio
     std::make_shared<std::thread>(&KeyboardControllerNode::ReadKeyThread, this);
   (*read_key_thread).detach();
   pose_.pose.position.z = MIN_HEIGHT;
+  mpx_parameters_ = std::make_shared<rclcpp::AsyncParametersClient>(this, "controller");
   for (size_t i = 0; i < 3; i++) {
     rpy_[i] = 0.0;
   }
@@ -205,7 +206,23 @@ void KeyboardControllerNode::ReadKeyThread()
         // MPX starts at rest and ramps to h_mpc: mirror it and lock the motion keys
         // until MPX releases them.
         twist_ = geometry_msgs::msg::Twist();
-        pose_.pose.position.z = MPC_START_HEIGHT;
+        // Start height = mpc_rl_handoff.h_mpc of the MPX node (mpx_node.yaml); height limits =
+        // com_height_limits.h_min/h_max of the MPX node (config_tita.py).
+        mpx_parameters_->get_parameters(
+          {"mpc_rl_handoff.h_mpc", "com_height_limits.h_min", "com_height_limits.h_max"},
+          [this](std::shared_future<std::vector<rclcpp::Parameter>> f) {
+            const auto p = f.get();
+            auto is_double = [&p](size_t i) {
+              return p.size() > i && p[i].get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE;
+            };
+            if (is_double(1) && is_double(2) && p[1].as_double() <= p[2].as_double()) {
+              min_height_ = p[1].as_double();
+              max_height_ = p[2].as_double();
+            }
+            if (!is_double(0)) return;
+            pose_.pose.position.z = clamp(p[0].as_double(), min_height_, max_height_);
+            print_interface();
+          });
         mpx_keys_locked_ = mpx_running;
       } else if ((goal == "rl_flat" || goal == "transform_down") && from_mpc) {
         // rl_flat and transform_down: MPX stops the robot and lowers it before handing off
@@ -346,7 +363,7 @@ void KeyboardControllerNode::ReadKeyThread()
     pose_.pose.orientation.z = q.z();
     pose_.pose.orientation.w = q.w();
     pose_.pose.position.y = clamp(pose_.pose.position.y, -MAX_POSITION, MAX_POSITION);
-    pose_.pose.position.z = clamp(pose_.pose.position.z, MIN_HEIGHT, MAX_HEIGHT);
+    pose_.pose.position.z = clamp(pose_.pose.position.z, min_height_, max_height_);
     print_interface();
   }
 }

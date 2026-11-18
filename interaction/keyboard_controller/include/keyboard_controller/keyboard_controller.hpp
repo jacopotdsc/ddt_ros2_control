@@ -42,7 +42,6 @@
 #define MAX_POSITION 0.1
 #define MIN_HEIGHT 0.25
 #define MAX_HEIGHT 0.44
-#define MPC_START_HEIGHT 0.4
 
 using namespace std::chrono_literals;
 
@@ -64,6 +63,8 @@ private:
   void PubCmdVelCallBack();
   bool MpxRunning();  // MPX publishes the keys-locked topic
   void CheckRlControllerAlive();
+  std::shared_ptr<rclcpp::AsyncParametersClient> mpx_parameters_;  // MPX node, for h_mpc
+  double min_height_ = MIN_HEIGHT, max_height_ = MAX_HEIGHT;
 
   std::shared_ptr<rclcpp::Publisher<geometry_msgs::msg::Twist>> cmd_vel_publisher_;
   std::shared_ptr<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>> posestamped_publisher_;

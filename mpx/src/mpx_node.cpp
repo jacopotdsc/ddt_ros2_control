@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <iostream>
+#include <limits>
 #include <pybind11/stl.h>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -188,7 +189,7 @@ private:
       return;
     }
     if (!blocked())
-      command_[3] = z;
+      command_[3] = std::clamp(z, h_min_, h_max_);  // limits of config_tita.py
   }
   void apply_mode(const std::string &mode) {
     bool rl =
@@ -385,6 +386,39 @@ private:
       layout_.nq = solver_.attr("nq").cast<size_t>();
       layout_.nv = solver_.attr("nv").cast<size_t>();
       standup_phase_ = solver_.attr("phase_index")("W_standup").cast<int>();
+      {
+        // COM height limits of the MPC (config_tita.py h_min, h_max): every height command
+        // (topic, pose, h_mpc, h_rl) is clamped to them.
+        auto cfg = solver_.attr("config");
+        double h_min = cfg.attr("h_min").cast<double>(), h_max = cfg.attr("h_max").cast<double>();
+        if (!(h_min <= h_max))
+          throw std::runtime_error("Invalid COM height limits (config_tita.py h_min, h_max)");
+        Lock lock(mutex_);
+        h_min_ = h_min;
+        h_max_ = h_max;
+        for (auto [name, h] : {std::pair<const char *, double *>{"h_mpc", &h_mpc_},
+                               std::pair<const char *, double *>{"h_rl", &h_rl_}}) {
+          if (*h < h_min || *h > h_max) {
+            RCLCPP_WARN(get_logger(), "mpc_rl_handoff.%s=%.3f m outside config_tita.py "
+                        "[h_min, h_max] = [%.3f, %.3f] m: using %.3f m", name, *h, h_min, h_max,
+                        std::clamp(*h, h_min, h_max));
+            *h = std::clamp(*h, h_min, h_max);
+          }
+        }
+        command_[3] = std::clamp(command_[3], h_min, h_max);
+        RCLCPP_INFO(get_logger(), "COM height limits from config_tita.py: [%.3f, %.3f] m",
+                    h_min, h_max);
+      }
+      // The same limits as read-only parameters, for the height command sources (keyboard).
+      {
+        rcl_interfaces::msg::ParameterDescriptor read_only;
+        read_only.read_only = true;
+        read_only.description = "COM height limit of the MPC (config_tita.py), m";
+        for (auto [name, value] : {std::pair<const char *, double>{"com_height_limits.h_min", h_min_},
+                                   std::pair<const char *, double>{"com_height_limits.h_max", h_max_}})
+          if (!has_parameter(name))
+            declare_parameter(name, value, read_only);
+      }
       auto period = solver_.attr("period_ns").cast<int64_t>();
       {
         Lock lock(mutex_);
@@ -581,6 +615,9 @@ private:
   int standup_phase_ = 0;  // its index in config_tita.weight_phases (worker thread)
   bool pending_compile_ = false, estimates_ = false;
   double h_mpc_ = 0., h_rl_ = 0., height_tol_ = 0., vz_tol_ = 0.;
+  // COM height limits (config_tita.py h_min, h_max), set once the solver is loaded (mutex_).
+  double h_min_ = -std::numeric_limits<double>::infinity(),
+         h_max_ = std::numeric_limits<double>::infinity();
   int64_t settle_ns_ = 0, timeout_ns_ = 0, generation_ = 0;
   std::optional<int64_t> handoff_start_, handoff_settled_, activation_start_;
   std::optional<double> last_pose_z_;
