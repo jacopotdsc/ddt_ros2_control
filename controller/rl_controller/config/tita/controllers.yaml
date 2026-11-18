@@ -77,9 +77,8 @@
         command_timeout: 1.0  # seconds without new MPX commands (WBC/MPC stopped) before FSMState_MPC folds the robot
         joint_kp: [20.0, 20.0, 20.0, 0.0, 20.0, 20.0, 20.0, 0.0]
         joint_kd: [1.0, 1.0, 1.0, 0.3, 1.0, 1.0, 1.0, 0.3]
-      rl_policy_names:
-        - "rl_flat"
-
+      residual:  # state residual: tau = (tau_ff + offset) + PD of mpc; network in residual_node (config/tita/residual.yaml)
+        command_timeout: 0.1  # s: an offset older than this is not added (offset = 0)
       rl_flat:
         policy_path: config/tita/flat.onnx
         output_name: "nn_output"

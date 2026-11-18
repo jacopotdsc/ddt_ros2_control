@@ -1,6 +1,6 @@
 // MPX WBC node (rclcpp front end; the WBC is the JAX function of MPX), separate
 // process from the MPC node (mpx_node_cpp), so the two never share a GIL.
-// On the joint_states timestamps, at timing.wbc_frequency, it uses U[0] from the
+// On the joint_states timestamps, at whole_body_frequency of config_tita.py, it uses U[0] from the
 // latest mpx/trajectory, runs the WBC on the measured state and publishes mpx/joint_command:
 // effort = tau_ff, position = q_des, velocity = qd_des, for the separate LLC node.
 #include "mpx/node_common.hpp"
@@ -21,11 +21,9 @@ class __attribute__((visibility("hidden"))) WBCNode : public rclcpp::Node {
 public:
   explicit WBCNode(const rclcpp::NodeOptions &options)
       : Node("wbc", options) {
-    wbc_frequency_ = num("timing.wbc_frequency");
     trajectory_timeout_ = num("timing.trajectory_timeout");
-    if (!(wbc_frequency_ > 0.) || !(trajectory_timeout_ > 0.))
-      throw std::invalid_argument(
-          "timing.wbc_frequency and timing.trajectory_timeout must be positive");
+    if (!(trajectory_timeout_ > 0.))
+      throw std::invalid_argument("timing.trajectory_timeout must be positive");
     joint_command_pub_ = create_publisher<Joints>(
         str("outputs.joint_command_topic"), rclcpp::QoS(1).best_effort());
     subs_.push_back(create_subscription<String>(
@@ -41,9 +39,9 @@ public:
         [this](Array::ConstSharedPtr m) { on_trajectory(*m); }));
     feedback_ = std::make_unique<Feedback>(*this, mutex_, cv_);
     RCLCPP_INFO(get_logger(),
-                "MPX WBC node (C++ ROS, JAX WBC): %.1f Hz on the joint_states "
-                "timestamps; base state source: %s",
-                wbc_frequency_, feedback_->source().c_str());
+                "MPX WBC node (C++ ROS, JAX WBC) on the joint_states timestamps "
+                "(frequency from config_tita.py); base state source: %s",
+                feedback_->source().c_str());
   }
   ~WBCNode() override { stop(); }
   void start() { worker_ = std::thread(&WBCNode::run, this); }
@@ -127,8 +125,7 @@ private:
                                     num("mpc_rl_handoff.h_mpc"),
                                     py::cpp_function([this](const std::string &s) {
                                       RCLCPP_INFO(get_logger(), "%s", s.c_str());
-                                    }),
-                                    num("timing.mpc_frequency"));
+                                    }));  // frequencies: config_tita.py
       StateLayout layout;
       layout.names = solver_.attr("joint_names").cast<std::vector<std::string>>();
       layout.addresses = solver_.attr("joint_addresses")
@@ -136,6 +133,10 @@ private:
       layout.nq = solver_.attr("nq").cast<size_t>();
       layout.nv = solver_.attr("nv").cast<size_t>();
       auto limits = solver_.attr("effort_limits").cast<std::vector<double>>();
+      const int64_t period = solver_.attr("wbc_period_ns").cast<int64_t>();
+      if (period <= 0)
+        throw std::runtime_error("Invalid WBC period (config_tita.py whole_body_frequency)");
+      wbc_frequency_ = 1e9 / period;
       const auto nj = layout.names.size();
       if (layout.addresses.size() != nj || limits.size() != nj)
         throw std::runtime_error("Invalid solver configuration");
@@ -149,10 +150,9 @@ private:
         nu_ = solver_.attr("nu").cast<size_t>();
         ready_ = true;
       }
-      RCLCPP_INFO(get_logger(), "MPX WBC ready on CPU (compiled in %.1f s).",
-                  seconds(Clock::now() - compile_start));
+      RCLCPP_INFO(get_logger(), "MPX WBC ready on CPU (compiled in %.1f s): %.1f Hz.",
+                  seconds(Clock::now() - compile_start), wbc_frequency_);
 
-      const int64_t period = int64_t(std::llround(1e9 / wbc_frequency_));
       const double dt = period / 1e9;
       std::vector<double> qpos(layout.nq), qvel(layout.nv), u(nu_);
       int64_t generation = -1, next_due = 0, last_stamp = -1, window_start = 0;

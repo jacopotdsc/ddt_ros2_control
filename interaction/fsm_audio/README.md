@@ -14,8 +14,7 @@ installed paths to TITA's audio service. It does not read from, copy to, or modi
 
 The filename must match the FSM state exactly, for example `transform_up.mp3` for the
 `transform_up` state. States without a matching MP3 are logged and not announced.
-RL states are named after the policy in `rl_policy_names` of `controllers.yaml`, not after
-the key command: `rl_0` selects `rl_flat`, so the clip is `rl_flat.mp3`. The TITA states are
+The only RL state is `rl_flat` (the key command has the same name), so the clip is `rl_flat.mp3`. The TITA states are
 `idle`, `transform_up`, `transform_down`, `joint_pd`, `mpc` and `rl_flat`.
 
 Transfer the package, including the generated files, to the robot:

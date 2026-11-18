@@ -15,7 +15,6 @@
 #ifndef RL_CONTROLLER__FSM__CONTROLFSMDATA_H_
 #define RL_CONTROLLER__FSM__CONTROLFSMDATA_H_
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -34,8 +33,6 @@ struct MpcCommand
   std::mutex mutex;
   std::vector<double> effort;
   bool valid = false;
-  uint64_t seq = 0;              // incremented on every new MPX torque
-  std::condition_variable cv;    // notified on every new MPX torque
   std::string handoff;
   // mpx/joint_command (MPX WBC output, C++ or Python backend): feedforward torque
   // (effort) and joint targets for the FSMState_MPC joint PD.
@@ -43,6 +40,17 @@ struct MpcCommand
   std::chrono::steady_clock::time_point received{};
   // Benchmark samples, logged and cleared by the joint_command callback every 5 s.
   std::vector<double> run_us, latency_ms;
+};
+
+// residual/joint_command (residual_node): torque offset of the residual network, one per
+// joint (controller order). FSMState_Residual adds it to the mpc torque (tau_ff + PD) while
+// the FSM is in "residual" (`active`, used by the callback log) and the offset is fresh.
+struct ResidualCommand
+{
+  std::mutex mutex;
+  std::vector<double> tau;
+  bool active = false;
+  std::chrono::steady_clock::time_point received{};
 };
 
 struct ControlFSMData
@@ -57,6 +65,7 @@ struct ControlFSMData
   };
 
   MpcCommand mpc_command;
+  ResidualCommand residual_command;
   std::shared_ptr<RobotControlParameters> params;
   std::shared_ptr<LowlevelCmd> low_cmd;
   std::shared_ptr<LowlevelState> low_state;

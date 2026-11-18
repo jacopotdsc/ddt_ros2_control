@@ -8,7 +8,6 @@ No commands are published and no robot or simulator is controlled.
 
     source ~/ddt_ros2_ws/install/setup.bash
     python3 ~/ddt_ros2_ws/src/mpx/scripts/mpx_benchmark.py
-    python3 ~/ddt_ros2_ws/src/mpx/scripts/mpx_benchmark.py --mpc-hz 40 --wbc-hz 100
 
 JAX compiles both functions on the first run; compile time is reported separately
 and excluded from steady-state measurements. ``--steps`` counts solves per component (MPC and WBC).
@@ -52,23 +51,18 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--steps', type=int, default=2000,
                         help='number of solves per component to time (default: 2000)')
-    parser.add_argument('--mpc-hz', type=float, default=40.,
-                        help='MPC budget rate (default: 40 Hz)')
-    parser.add_argument('--wbc-hz', type=float, default=100.,
-                        help='WBC budget rate (default: 100 Hz)')
-    args = parser.parse_args()
+    args = parser.parse_args()  # MPC/WBC budget rates: config_tita.py (set after the solver below)
     if args.steps < 2:
         parser.error('--steps must be at least 2')
-    if not all(np.isfinite(v) and v > 0 for v in (args.mpc_hz, args.wbc_hz)):
-        parser.error('--mpc-hz and --wbc-hz must be positive')
     print('NODE NAME: nessuno (benchmark Python offline)', flush=True)
     print('  Publishes to topics:\n    - Nessuno', flush=True)
     print('  Subscribes to topics:\n    - Nessuno', flush=True)
     model_desc = robot_description()
     solver = backend.Solver(model_desc, mode_controlled=True,
                             height=float(backend.config.com_z_to_track),
-                            log=lambda _message: None, mpc_frequency=args.mpc_hz)
+                            log=lambda _message: None)
     model, cfg = solver.model, solver.config
+    args.mpc_hz, args.wbc_hz = float(cfg.mpc_frequency), float(cfg.whole_body_frequency)  # config_tita.py
     qpos = np.zeros(model.nq, dtype=float)
     qvel = np.zeros(model.nv, dtype=float)
     qpos[:3] = [0., 0., cfg.robot_height]

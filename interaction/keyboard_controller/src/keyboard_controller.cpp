@@ -2,7 +2,7 @@
 #include <algorithm>
 
 const std::vector<std::pair<char, std::string>> KeyboardControllerNode::fsm_state_mapping = {
-{'0', "rl_0"}, {'1', "rl_1"}, {'2', "rl_2"},         {'3', "rl_3"},           {'4', "mpc"},
+  {'0', "rl_flat"}, {'4', "mpc"},
   {'5', "residual"}, {'6', "idle"}, {'7', "transform_up"}, {'8', "transform_down"}, {'9', "joint_pd"}};
 
 KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & options)
@@ -40,7 +40,7 @@ KeyboardControllerNode::KeyboardControllerNode(const rclcpp::NodeOptions & optio
       }
       // The keyboard mode always follows the FSM state it sees, whoever caused the change
       // (MPX stopped -> transform_down, end of the fold -> idle, command_watchdog, another
-      // command source). RL states carry the policy name (e.g. rl_flat): rl_N is kept.
+      // command source).
       const auto & state = msg->data;
       const bool known = std::any_of(
         fsm_state_mapping.begin(), fsm_state_mapping.end(),
@@ -125,7 +125,7 @@ void KeyboardControllerNode::print_interface()
     std::cout << "  (FSM: " << fsm_state << ")";
   }
   std::cout << std::endl;
-  if (fsm_goal_.data == "mpc" && !MpxRunning()) {
+  if ((fsm_goal_.data == "mpc" || fsm_goal_.data == "residual") && !MpxRunning()) {
     std::cout << RED << "  MPX NOT RUNNING: MPC unavailable, the current state stays active"
               << RESET << std::endl;
   }
@@ -193,22 +193,25 @@ void KeyboardControllerNode::ReadKeyThread()
       [key](const auto & pair) { return pair.first == key; });
     if (mode != fsm_state_mapping.end()) {
       const std::string & goal = mode->second;
-      // The FSM may still be in mpc after another key (e.g. an unknown rl_N).
-      const bool in_mpc = FsmState() == "mpc";
-      const bool from_mpc = fsm_goal_.data == "mpc" || in_mpc;
-      // The FSM never leaves mpc for these modes: keep showing mpc.
-      if (in_mpc && (goal == "transform_up" || goal == "residual")) continue;
+      // residual runs on MPX too (MPX command + network offset): same as mpc here.
+      const std::string fsm_state = FsmState();
+      const bool in_mpc = fsm_state == "mpc" || fsm_state == "residual";
+      const bool from_mpc = fsm_goal_.data == "mpc" || fsm_goal_.data == "residual" || in_mpc;
+      // The FSM never leaves mpc/residual for transform_up: keep showing the current mode.
+      if (in_mpc && goal == "transform_up") continue;
+      // residual is entered only from mpc (or kept from residual).
+      if (goal == "residual" && !in_mpc) continue;
       if (goal == "mpc" && !from_mpc) {
         // MPX starts at rest and ramps to h_mpc: mirror it and lock the motion keys
         // until MPX releases them.
         twist_ = geometry_msgs::msg::Twist();
         pose_.pose.position.z = MPC_START_HEIGHT;
         mpx_keys_locked_ = mpx_running;
-      } else if ((goal.rfind("rl_", 0) == 0 || goal == "transform_down") && from_mpc) {
-        // rl_N and transform_down: MPX stops the robot and lowers it before handing off
+      } else if ((goal == "rl_flat" || goal == "transform_down") && from_mpc) {
+        // rl_flat and transform_down: MPX stops the robot and lowers it before handing off
         // (keys stay locked meanwhile).
         twist_ = geometry_msgs::msg::Twist();
-      } else if (goal != "mpc") {
+      } else if (goal != "mpc" && goal != "residual") {
         mpx_keys_locked_ = false;
       }
       fsm_goal_.data = goal;
@@ -371,7 +374,7 @@ void KeyboardControllerNode::CheckRlControllerAlive()
     }
   }
   if (rl_controller_seen_ && !alive && fsm_goal_.data != "idle") {
-    // A restarted controller must not receive the old mode (e.g. rl_0 or mpc).
+    // A restarted controller must not receive the old mode (e.g. rl_flat or mpc).
     fsm_goal_.data = "idle";
     mpx_keys_locked_ = false;
     print_interface();

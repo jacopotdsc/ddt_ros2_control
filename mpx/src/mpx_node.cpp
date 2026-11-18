@@ -377,8 +377,7 @@ private:
                     .attr("Solver")(description, controlled_, h_mpc_,
                                     py::cpp_function([this](const std::string &s) {
                                       RCLCPP_INFO(get_logger(), "%s", s.c_str());
-                                    }),
-                                    num("timing.mpc_frequency"));
+                                    }));  // MPC frequency: config_tita.py (period_ns)
       layout_.names =
           solver_.attr("joint_names").cast<std::vector<std::string>>();
       layout_.addresses = solver_.attr("joint_addresses")

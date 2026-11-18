@@ -1,0 +1,28 @@
+# residual_node (src/residual_node.cpp), started by mpx/launch/mpx.launch.py (residual:=true).
+# Residual network on top of MPX: while the FSM is in "residual" it runs the policy every
+# time_interval (asynchronous from the WBC) and publishes a torque offset per joint on
+# residual/joint_command (ros_utils/topic_names.hpp); rl_controller adds it to tau_ff.
+# Dummy step: observations all 0 and offset fixed to 0 (the network still runs, to measure
+# its rate). For now the network is dummy_policy.onnx (zero output).
+/**:
+  ros__parameters:
+    # relative to the rl_controller share directory; dummy_policy.onnx: output always 0
+    # (script/generate_dummy_onnx.py), 1 input obs [1, num_obs]
+    policy_path: config/tita/dummy_policy.onnx
+    output_name: "nn_residual"
+    # 1 model input: history (ppo); 2 inputs: observation + history (np3o, flat.onnx)
+    num_obs: 33
+    num_actions: 8             # one torque offset per joint, order of `joints`
+    history_len: 1             # 1 model input = history [num_obs * history_len]: 1 for dummy_policy
+    time_interval: 0.01        # s: network period (100 Hz), independent from the WBC
+    # offset[i] = output[i] * action_scales[i] [N m]: num_actions values, order of `joints`
+    action_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    joints:                    # same order as tita_rl_controller.joints (controllers.yaml)
+      - joint_left_leg_1
+      - joint_left_leg_2
+      - joint_left_leg_3
+      - joint_left_leg_4
+      - joint_right_leg_1
+      - joint_right_leg_2
+      - joint_right_leg_3
+      - joint_right_leg_4

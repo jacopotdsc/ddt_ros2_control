@@ -25,8 +25,7 @@
 class FSMState_RLPPO : public FSMState_RL
 {
 public:
-  FSMState_RLPPO(
-    std::shared_ptr<ControlFSMData> data, RLParameters * rl_params, std::string stateName);
+  FSMState_RLPPO(std::shared_ptr<ControlFSMData> data, RLParameters * rl_params);
   virtual ~FSMState_RLPPO() {}
 
 protected:

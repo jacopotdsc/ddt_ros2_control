@@ -26,4 +26,4 @@
       estimate_topic_prefix: mpx/estimate
 
     mpc_rl_handoff:
-      rl_modes: ["rl_0"]  # one per rl_policy_names entry in controllers.yaml
+      rl_modes: ["rl_flat"]  # RL state of the FSM (FSM.cpp)

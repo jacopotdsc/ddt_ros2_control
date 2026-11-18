@@ -61,6 +61,11 @@ struct MpcParameters
   scalar_t command_timeout{1.0};  // s without a new MPX command before folding (transform_down)
 };
 
+struct ResidualParameters
+{
+  scalar_t command_timeout{0.1};  // s: an older residual offset is not added (offset = 0)
+};
+
 struct RLParameters
 {
   std::string policy_path;
@@ -114,9 +119,8 @@ struct RobotControlParameters
   TransformDownParameters transform_down_params;
   JointPDParameters joint_pd_params;
   MpcParameters mpc_params;
-  std::vector<RLParameters> rl_params;
-
-  std::vector<std::string> rl_policy_names;
+  RLParameters rl_flat_params;      // yaml block rl_flat: state and command "rl_flat"
+  ResidualParameters residual_params;  // yaml block residual (the network runs in residual_node)
   std::string rl_policy_jump_name;
   bool locomotion_use_lqr{false};
 };

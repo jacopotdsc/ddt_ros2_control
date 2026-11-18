@@ -25,6 +25,7 @@
 #include "FSMState_JointPD.h"
 #include "FSMState_Passive.h"
 #include "FSMState_RL.h"
+#include "FSMState_Residual.h"
 #include "FSMState_TransformDown.h"
 #include "FSMState_TransformUp.h"
 #include "rl_controller/common/enumClass.h"
@@ -33,25 +34,23 @@ struct FSMStateList
 {
   FSMState_Passive * passive;
   FSMState_MPC * mpc;
+  FSMState_Residual * residual;
   // FSMState_BalanceStand * balanceStand;
   FSMState_TransformUp * transformUp;
   FSMState_JointPD * jointPD;
   FSMState_TransformDown * transformDown;
-  std::vector<FSMState *> rlLists;
+  FSMState_RL * rlFlat;
 
   void deletePtr()
   {
     delete passive;
     delete mpc;
+    delete residual;
     // delete balanceStand;
     delete transformUp;
     delete jointPD;
     delete transformDown;
-    // delete rl;
-    for (auto ptr : rlLists) {
-      delete ptr;
-    }
-    rlLists.clear();
+    delete rlFlat;
   }
 };
 

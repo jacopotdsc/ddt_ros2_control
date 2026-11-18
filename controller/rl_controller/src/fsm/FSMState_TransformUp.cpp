@@ -242,16 +242,9 @@ std::string FSMState_TransformUp::checkTransition()
     //   if ((int)(_state_iter - fold_ramp_iter - standup_ramp_iter) >= 100) {
     //     this->_nextStateName = "rl";
     //   }
-  } else if (desiredState.find("rl_") == 0) {
+  } else if (desiredState == "rl_flat") {
     if ((int)(_state_iter - fold_ramp_iter - standup_ramp_iter) >= 100) {
-      try {
-        size_t number = std::stoi(desiredState.substr(3));
-        if (number < _data->params->rl_policy_names.size()) {
-          this->_nextStateName = _data->params->rl_policy_names[number];
-        }
-      } catch (const std::invalid_argument & e) {
-        std::cerr << "Invalid number format in \"" << desiredState << "\"" << std::endl;
-      }
+      this->_nextStateName = "rl_flat";
     }
   } else if (desiredState == "transform_down") {  // normal c
     if ((int)(_state_iter - fold_ramp_iter - standup_ramp_iter) >= 100) {
