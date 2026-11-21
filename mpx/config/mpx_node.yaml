@@ -57,6 +57,9 @@
       # MPX compiling, ramping to h_mpc after "mpc", or handing off to RL.
       keys_locked_topic: /mpx/keys_locked
       handoff_topic: mpx/handoff         # String, RL mode MPX has handed control to
+      # Bool latched, true once mpx_wbc_node has compiled the WBC: mpx_node_cpp starts the trajectory
+      # (height ramp, warm-up solves, unlock timer) only after it. Empty = do not wait.
+      wbc_ready_topic: /mpx/wbc_ready
       # Believed state (com, com_vel, base_rpy, left/right_wheel) when behavior.publish_estimate.
       estimate_topic_prefix: /mpx/estimate
 

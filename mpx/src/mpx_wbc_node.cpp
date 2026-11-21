@@ -4,6 +4,7 @@
 // latest mpx/trajectory, runs the WBC on the measured state and publishes mpx/joint_command:
 // effort = tau_ff, position = q_des, velocity = qd_des, for the separate LLC node.
 #include "mpx/node_common.hpp"
+#include <std_msgs/msg/bool.hpp>
 #include "mpx/python_buffers.hpp"
 #include <atomic>
 #include <iostream>
@@ -26,6 +27,10 @@ public:
       throw std::invalid_argument("timing.trajectory_timeout must be positive");
     joint_command_pub_ = create_publisher<Joints>(
         str("outputs.joint_command_topic"), rclcpp::QoS(1).best_effort());
+    // Latched: the MPC node starts its trajectory only once the WBC has compiled.
+    ready_pub_ = create_publisher<std_msgs::msg::Bool>(
+        str("outputs.wbc_ready_topic"), rclcpp::QoS(1).transient_local());
+    publish_ready(false);
     subs_.push_back(create_subscription<String>(
         str("inputs.robot_description_topic"), rclcpp::QoS(1).transient_local(),
         [this](String::ConstSharedPtr m) {
@@ -57,6 +62,11 @@ public:
   bool failed() const { return failed_.load(); }
 
 private:
+  void publish_ready(bool value) {
+    std_msgs::msg::Bool msg;
+    msg.data = value;
+    ready_pub_->publish(msg);
+  }
   struct Trajectory {
     bool active = false;
     int64_t generation = -1, stamp = 0;
@@ -150,6 +160,7 @@ private:
         nu_ = solver_.attr("nu").cast<size_t>();
         ready_ = true;
       }
+      publish_ready(true);
       RCLCPP_INFO(get_logger(), "MPX WBC ready on CPU (compiled in %.1f s): %.1f Hz.",
                   seconds(Clock::now() - compile_start), wbc_frequency_);
 
@@ -285,6 +296,7 @@ private:
   std::string description_;
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subs_;
   rclcpp::Publisher<Joints>::SharedPtr joint_command_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
 };
 
 int main(int argc, char **argv) {
