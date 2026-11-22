@@ -472,8 +472,7 @@ private:
             // The MPC compiles at once on key 4; the trajectory waits for the WBC.
             bool wbc_wait = enabled_ && !pending_compile_ && !wbc_ready_;
             if (wbc_wait && seconds(now - last_wait) >= 2.) {
-              RCLCPP_WARN(get_logger(), "MPX waiting for the WBC compilation "
-                                        "(mpx_wbc_node) before the trajectory");
+              RCLCPP_WARN(get_logger(), "MPX waiting for the WBC compilation ");
               last_wait = now;
             }
             if (enabled_ && !wbc_wait && feedback_->fresh(now) &&

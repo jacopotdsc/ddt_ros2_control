@@ -1,7 +1,8 @@
 // MPX WBC node (rclcpp front end; the WBC is the JAX function of MPX), separate
 // process from the MPC node (mpx_node_cpp), so the two never share a GIL.
-// On the joint_states timestamps, at whole_body_frequency of config_tita.py, it uses U[0] from the
-// latest mpx/trajectory, runs the WBC on the measured state and publishes mpx/joint_command:
+// On the joint_states timestamps, at whole_body_frequency of config_tita.py, it uses the first input
+// U[0] of the latest mpx/trajectory (held until the next plan), runs the WBC on the measured state and
+// publishes mpx/joint_command:
 // effort = tau_ff, position = q_des, velocity = qd_des, for the separate LLC node.
 #include "mpx/node_common.hpp"
 #include <std_msgs/msg/bool.hpp>
@@ -72,7 +73,7 @@ private:
     int64_t generation = -1, stamp = 0;
     double height = 0.;
     int phase = 0;  // weight phase index (config_tita.weight_phases), from the MPC node
-    std::vector<double> U;
+    std::vector<double> U;  // whole MPC input plan, horizon x nu row-major (mpx/node_common.hpp)
     Clock::time_point received{};
   };
   std::string str(const char *key) const {
@@ -181,7 +182,6 @@ private:
         Joints joints;
         Clock::time_point received;
         int64_t stamp, plan_stamp, plan_generation;
-        double height;
         int phase;
         bool reset = false;
         {
@@ -204,10 +204,9 @@ private:
           stamp = last_stamp = feedback_->joint_stamp;
           plan_stamp = trajectory_.stamp;
           plan_generation = trajectory_.generation;
-          // Match mjx_tita.py: use the first MPC input and hold it until a new
-          // plan arrives. The WBC still recomputes on this cycle's measured state.
+          // Match mjx_tita.py: use the first MPC input U[0] and hold it until a new plan
+          // arrives. The WBC still recomputes on this cycle's measured state.
           std::copy_n(trajectory_.U.begin(), nu_, u.begin());
-          height = trajectory_.height;
           phase = trajectory_.phase;
           if (plan_generation != generation) {
             generation = plan_generation;
@@ -231,7 +230,7 @@ private:
           solver_.attr("prepare_wbc")(mpx::readonly_buffer(qpos),
                                       mpx::readonly_buffer(qvel), reset);
           auto out =
-              mpx::array_values(solver_.attr("wbc")(mpx::readonly_buffer(u), height, phase));
+              mpx::array_values(solver_.attr("wbc")(mpx::readonly_buffer(u), phase));
           if (out.size() != nj + layout.nv)
             throw std::runtime_error("Invalid WBC output size");
           // Joint targets one WBC period ahead, for the low-level PD.

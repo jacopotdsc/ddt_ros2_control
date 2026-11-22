@@ -777,7 +777,6 @@ class MPXNode(Node):
             tita_state[9:12][None, :],
             tita_state[12:15][None, :],
             tita_state[15:18][None, :],
-            com_height_target=command[:, 3],
         )
         flags = jnp.array([
             mpc_ok, jnp.all(jnp.isfinite(desired)), jnp.all(jnp.isfinite(qddot)),

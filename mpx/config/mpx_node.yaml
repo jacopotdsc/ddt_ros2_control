@@ -68,7 +68,7 @@
     # idle and joint_pd are the immediate safety commands: MPX goes to standby at once.
     mpc_rl_handoff:
       h_mpc: 0.35                    # m, COM height MPX drives to on every "mpc" activation
-      h_rl: 0.28                    # m, COM height handed to RL or to the fold (= h_min of config_tita.py)
+      h_rl: 0.23                    # m, COM height handed to RL or to the fold (= h_min of config_tita.py)
       rl_modes: ["rl_flat"]         # RL modes MPX hands off to: the RL state of the FSM
                                     # of rl_controller (others are ignored, like the FSM does)
       height_tol: 0.03              # m, |COM z - handoff height|

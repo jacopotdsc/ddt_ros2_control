@@ -220,7 +220,7 @@ struct StateLayout {
 //   data[3]     COM height reference (ramped) for the WBC
 //   data[4]     1 = active, 0 = standby (the WBC stops publishing at once)
 //   data[5]     weight phase: index in config_tita.weight_phases (W_mpc / W_wbc entry)
-//   data[6..]   U, horizon x nu row-major; WBC currently holds the first row U[0]
+//   data[6..]   U, horizon x nu row-major; the WBC uses U[0] (held until the next plan)
 // layout.dim: {"header", 6}, {"horizon", N, N*nu}, {"input", nu, nu}; data_offset 0.
 constexpr size_t kTrajectoryHeader = 6;
 
