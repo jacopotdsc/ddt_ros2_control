@@ -37,6 +37,7 @@ inline const std::string filtered_state = "filtered_state";  // tita_state_estim
 inline const std::string mpx_joint_command = "mpx/joint_command";  // WBC: tau_ff, q_des, qd_des
 inline const std::string mpx_handoff = "mpx/handoff";
 inline const std::string mpx_keys_locked = "mpx/keys_locked";
+inline const std::string mpx_wbc_ready = "mpx/wbc_ready";  // WBC compiled (latched)
 
 // residual network
 inline const std::string residual_joint_command = "residual/joint_command";

@@ -23,6 +23,7 @@
       trajectory_topic: mpx/trajectory         # MPC -> WBC (C++ nodes)
       handoff_topic: mpx/handoff
       keys_locked_topic: mpx/keys_locked
+      wbc_ready_topic: mpx/wbc_ready           # Bool latched, mpx_wbc_node compiled (the MPC trajectory starts after it)
       estimate_topic_prefix: mpx/estimate
 
     mpc_rl_handoff:

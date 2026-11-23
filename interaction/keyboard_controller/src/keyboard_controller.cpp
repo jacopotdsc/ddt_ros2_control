@@ -208,19 +208,26 @@ void KeyboardControllerNode::ReadKeyThread()
         twist_ = geometry_msgs::msg::Twist();
         // Start height = mpc_rl_handoff.h_mpc of the MPX node (mpx_node.yaml); height limits =
         // com_height_limits.h_min/h_max of the MPX node (config_tita.py).
+        // Two requests: the limits are declared only once the MPX solver is loaded, and a request
+        // with an undeclared name returns nothing (the height stayed at MIN_HEIGHT).
         mpx_parameters_->get_parameters(
-          {"mpc_rl_handoff.h_mpc", "com_height_limits.h_min", "com_height_limits.h_max"},
+          {"mpc_rl_handoff.h_mpc"}, [this](std::shared_future<std::vector<rclcpp::Parameter>> f) {
+            const auto p = f.get();
+            if (p.size() != 1 || p[0].get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) return;
+            pose_.pose.position.z = clamp(p[0].as_double(), min_height_, max_height_);
+            print_interface();
+          });
+        mpx_parameters_->get_parameters(
+          {"com_height_limits.h_min", "com_height_limits.h_max"},
           [this](std::shared_future<std::vector<rclcpp::Parameter>> f) {
             const auto p = f.get();
-            auto is_double = [&p](size_t i) {
-              return p.size() > i && p[i].get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE;
-            };
-            if (is_double(1) && is_double(2) && p[1].as_double() <= p[2].as_double()) {
-              min_height_ = p[1].as_double();
-              max_height_ = p[2].as_double();
-            }
-            if (!is_double(0)) return;
-            pose_.pose.position.z = clamp(p[0].as_double(), min_height_, max_height_);
+            if (p.size() != 2 || p[0].get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                p[1].get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                p[0].as_double() > p[1].as_double())
+              return;
+            min_height_ = p[0].as_double();
+            max_height_ = p[1].as_double();
+            pose_.pose.position.z = clamp(pose_.pose.position.z, min_height_, max_height_);
             print_interface();
           });
         mpx_keys_locked_ = mpx_running;

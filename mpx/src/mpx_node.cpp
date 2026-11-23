@@ -46,6 +46,17 @@ public:
         str("outputs.keys_locked_topic"), latched);
     handoff_pub_ = create_publisher<String>(str("outputs.handoff_topic"), 1);
     publish_lock(true);
+    // The trajectory (height ramp, warm-up solves, unlock timer) starts only once
+    // mpx_wbc_node has compiled: otherwise the ramp runs while the FSM still waits for
+    // a WBC torque, and the takeover sees a height step (first activation, 2026-11-21).
+    wbc_ready_ = str("outputs.wbc_ready_topic").empty();
+    if (!wbc_ready_)
+      subscribe<std_msgs::msg::Bool>(str("outputs.wbc_ready_topic"), latched,
+                                     [this](const std_msgs::msg::Bool &m) {
+                                       Lock lock(mutex_);
+                                       wbc_ready_ = m.data;
+                                       cv_.notify_all();
+                                     });
     subscribe<String>(str("inputs.robot_description_topic"), latched,
                       [this](const String &m) {
                         Lock lock(mutex_);
@@ -458,11 +469,18 @@ private:
           std::unique_lock<std::mutex> lock(mutex_);
           while (!stop_) {
             auto now = Clock::now();
-            if (enabled_ && feedback_->fresh(now) &&
+            // The MPC compiles at once on key 4; the trajectory waits for the WBC.
+            bool wbc_wait = enabled_ && !pending_compile_ && !wbc_ready_;
+            if (wbc_wait && seconds(now - last_wait) >= 2.) {
+              RCLCPP_WARN(get_logger(), "MPX waiting for the WBC compilation "
+                                        "(mpx_wbc_node) before the trajectory");
+              last_wait = now;
+            }
+            if (enabled_ && !wbc_wait && feedback_->fresh(now) &&
                 (generation != generation_ || next_due == 0 ||
                  feedback_->joint_stamp >= next_due))
               break;
-            if (enabled_ && !feedback_->fresh(now) &&
+            if (enabled_ && !wbc_wait && !feedback_->fresh(now) &&
                 seconds(now - last_wait) >= 2.) {
               RCLCPP_WARN(get_logger(),
                           "MPX waiting for fresh base/joint feedback");
@@ -614,6 +632,7 @@ private:
   bool standup_ = false;  // taking over from transform_up: weight phase "W_standup"
   int standup_phase_ = 0;  // its index in config_tita.weight_phases (worker thread)
   bool pending_compile_ = false, estimates_ = false;
+  bool wbc_ready_ = false;  // mpx_wbc_node compiled (mutex_)
   double h_mpc_ = 0., h_rl_ = 0., height_tol_ = 0., vz_tol_ = 0.;
   // COM height limits (config_tita.py h_min, h_max), set once the solver is loaded (mutex_).
   double h_min_ = -std::numeric_limits<double>::infinity(),
