@@ -1,34 +1,74 @@
 # command_watchdog (src/command_watchdog.cpp), loaded by hw.launch.py and sim_gazebo.launch.py.
-# Always started by hw.launch.py and sim_gazebo.launch.py, with the timeout below.
+# One block per FSM state: `checks` lists the cases checked in that state (yaw_rate, roll_rate,
+# pitch_rate, roll, tilt, linear_speed, torque, imu_lost, command_lost) and the block holds only
+# their thresholds. States not in `states` (idle, joint_pd) check nothing.
+# torque, imu_lost, roll, tilt, ... -> idle; command_lost -> transform_down.
 /**:
   ros__parameters:
-    # FSM states where every case below is checked: MPX, rl_flat and residual. Elsewhere (idle, transform_up stand-up, transform_down, joint_pd) the
-    # watchdog requests nothing: 2026-10-28, it stopped the stand-up on the robot.
-    active_states: [mpc, rl_flat, residual]
-    # No twist on command/cmd_twist for this long (s) -> transform_down, at every tick.
-    timeout: 5.0
-    # Body IMU (imu_sensor_broadcaster/imu) -> idle, once when exceeded.
-    # Measured 2026-10-26: normal mpc |wz| <= 1.15, |w_xy| <= 0.9, tilt <= 8 deg; transform_down
-    # |w_xy| up to 3.5 rad/s, tilt up to 25.5 deg (Gazebo) / 16 deg (robot); robot yaw spin
-    # |wz| 5.5 rad/s. Keep w_xy and tilt above the fold, else idle drops the robot halfway.
-    max_yaw_rate: 1.0          # rad/s, |wz|
-    max_roll_rate: 1.0         # rad/s, |wx|
-    max_pitch_rate: 1.0        # rad/s, |wy|
-    max_roll_deg: 20.0         # deg, |roll| from the IMU orientation (above the fold's 25.5 tilt)
-    max_tilt_deg: 20.0         # deg, base tilt from the IMU orientation
-    # No body IMU data for this long (s) -> idle; also the age above which roll and tilt are
-    # not trusted. Armed by the first IMU message.
-    imu_timeout: 5.0
-    # Forward speed, filtered_state twist.linear.x (base_link), mean over speed_window -> idle.
-    # Robot bags 2026-10-07..26: normal driving 0.5 s mean <= 0.50 m/s (peak 0.54); MPX takeover
-    # peaks up to 1.47 m/s for < 0.2 s (0.5 s mean 0.37); forward run of 00-58: 0.5 s mean 0.88.
-    max_linear_speed: 1.0      # m/s
-    speed_window: 0.5          # s
-    # Joints from joint_states, matched by name; max_torque follows this order.
+    states: [mpc, residual, rl_flat, transform_up, transform_down]
+    # Joints from joint_states, matched by name; every max_torque follows this order.
     joint_names: [joint_left_leg_1, joint_left_leg_2, joint_left_leg_3, joint_left_leg_4,
                   joint_right_leg_1, joint_right_leg_2, joint_right_leg_3, joint_right_leg_4]
-    # Measured effort above max_torque for torque_hold s in a row -> idle (joint stuck or fighting).
-    # Robot bags: peaks 61.5 / 41.6 / 59.4 / 16.7 Nm (leg 1/2/3/wheel), above 50 Nm at most
-    # 0.15 s in a row; 0.5 s mean at most 47.0 / 16.8 / 37.1 / 6.6 Nm (leg 1: transform_up).
-    max_torque: [55.0, 40.0, 50.0, 15.0, 55.0, 40.0, 50.0, 15.0]   # Nm
-    torque_hold: 1.0           # s
+    # Shared: no body IMU data for this long (s) -> imu_lost; also the age above which roll and
+    # tilt are not trusted. Armed by the first IMU message.
+    imu_timeout: 5.0
+    # Shared: window of the forward speed mean (filtered_state twist.linear.x, base_link).
+    speed_window: 0.5          # s
+
+    # Locomotion states: every case (values of before 2026-11-23, when they were one list for
+    # active_states [mpc, rl_flat, residual]).
+    # Measured 2026-10-26: normal mpc |wz| <= 1.15, |w_xy| <= 0.9, tilt <= 8 deg; robot yaw spin
+    # |wz| 5.5 rad/s. Robot bags 2026-10-07..26: normal driving 0.5 s mean |vx| <= 0.50 m/s
+    # (peak 0.54); MPX takeover peaks up to 1.47 m/s for < 0.2 s (0.5 s mean 0.37). Torque peaks
+    # 61.5 / 41.6 / 59.4 / 16.7 Nm (leg 1/2/3/wheel), above 50 Nm at most 0.15 s in a row.
+    mpc:
+      checks: [yaw_rate, roll_rate, pitch_rate, roll, tilt, linear_speed, torque, imu_lost,
+               command_lost]
+      max_yaw_rate: 1.0        # rad/s, |wz|
+      max_roll_rate: 1.0       # rad/s, |wx|
+      max_pitch_rate: 1.0      # rad/s, |wy|
+      max_roll_deg: 20.0       # deg, |roll| from the IMU orientation
+      max_tilt_deg: 20.0       # deg, base tilt from the IMU orientation
+      max_linear_speed: 1.0    # m/s, 0.5 s mean
+      max_torque: [55.0, 40.0, 50.0, 15.0, 55.0, 40.0, 50.0, 15.0]   # Nm
+      torque_hold: 0.5         # s above max_torque in a row
+      timeout: 5.0             # s without twist on command/cmd_twist -> transform_down
+    residual:
+      checks: [yaw_rate, roll_rate, pitch_rate, roll, tilt, linear_speed, torque, imu_lost,
+               command_lost]
+      max_yaw_rate: 1.0
+      max_roll_rate: 1.0
+      max_pitch_rate: 1.0
+      max_roll_deg: 20.0
+      max_tilt_deg: 20.0
+      max_linear_speed: 1.0
+      max_torque: [55.0, 40.0, 50.0, 15.0, 55.0, 40.0, 50.0, 15.0]
+      torque_hold: 1.0
+      timeout: 5.0
+    rl_flat:
+      checks: [yaw_rate, roll_rate, pitch_rate, roll, tilt, linear_speed, torque, imu_lost,
+               command_lost]
+      max_yaw_rate: 1.0
+      max_roll_rate: 1.0
+      max_pitch_rate: 1.0
+      max_roll_deg: 20.0
+      max_tilt_deg: 20.0
+      max_linear_speed: 1.0
+      max_torque: [55.0, 40.0, 50.0, 15.0, 55.0, 40.0, 50.0, 15.0]
+      torque_hold: 0.5
+      timeout: 5.0
+
+    # Stand-up and fold: motor torques only (the IMU cases stopped the stand-up on 2026-10-28;
+    # the fold reaches |w_xy| 3.5 rad/s and 25.5 deg tilt).
+    # Robot bags 2026-10-07..11-23 (src/mpx/test_results/real_2026_11_23/transform_torques.py),
+    # 19 transform_up and 14 transform_down: max 45.1 / 25.1 / 46.7 / 2.3 Nm (leg 1/2/3/wheel),
+    # never above 60 Nm. 2026-11-23 right hip one turn off (hardware_bridge 2*pi): stall at
+    # -100 Nm from 0.35 s after entry for 0.65 s, then the motor and the board shut down.
+    transform_up:
+      checks: [torque]
+      max_torque: [60.0, 40.0, 60.0, 10.0, 60.0, 40.0, 60.0, 10.0]   # Nm
+      torque_hold: 0.2         # s
+    transform_down:
+      checks: [torque]
+      max_torque: [60.0, 40.0, 60.0, 10.0, 60.0, 40.0, 60.0, 10.0]   # Nm
+      torque_hold: 0.2         # s

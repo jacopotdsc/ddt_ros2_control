@@ -134,6 +134,7 @@ std::string FSMState_RL::checkTransition()
 {
   this->_nextStateName = this->_stateName;
   auto desiredState = _data->rc_data->fsm_name_;
+  if (desiredState == "idle" || desiredState == "joint_pd") return desiredState;
   // 将 switch 替换为 if-else 结构
   if (desiredState == "mpc" && FSMState_MPC::ready(_data)) {
     return "mpc";

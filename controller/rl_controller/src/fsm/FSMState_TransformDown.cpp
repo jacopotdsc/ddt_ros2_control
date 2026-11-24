@@ -97,6 +97,7 @@ std::string FSMState_TransformDown::checkTransition()
 {
   this->_nextStateName = this->_stateName;
   auto fsm_state_name = _data->rc_data->fsm_name_;
+  if (fsm_state_name == "idle" || fsm_state_name == "joint_pd") return fsm_state_name;
   // if (fsm_state_name == "transform_up") {
   //   this->_nextStateName = "transform_up";
   // } else if (fsm_state_name == "idle") {  // normal c
