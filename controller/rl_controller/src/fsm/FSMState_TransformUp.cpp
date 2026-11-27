@@ -226,6 +226,7 @@ std::string FSMState_TransformUp::checkTransition()
   this->_nextStateName = this->_stateName;
   iter++;
   auto desiredState = _data->rc_data->fsm_name_;
+  if (desiredState == "idle") return "idle";  // radio JUMP (safety): immediate
   if (desiredState == "transform_up") {
     // 无操作
     // } else if (desiredState == "idle") {  // normal c

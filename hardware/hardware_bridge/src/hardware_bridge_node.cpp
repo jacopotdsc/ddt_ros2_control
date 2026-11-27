@@ -17,6 +17,9 @@
 #include <pthread.h>
 #include <sched.h>
 
+#include <algorithm>
+#include <cmath>
+
 #include "pluginlib/class_list_macros.hpp"
 
 namespace tita_locomotion
@@ -202,6 +205,34 @@ hardware_interface::return_type HardwareBridge::write(
                   mJoints[id].kp * (mJoints[id].positionCommand - mJoints[id].position) +
                   mJoints[id].kd * (mJoints[id].velocityCommand - mJoints[id].velocity);
     only_ts.push_back(only_t);
+  }
+  // Torque guard (hardware_bridge_node.hpp): largest |torque| of this cycle.
+  double peak = 0.0;
+  size_t peak_id = 0;
+  bool finite = true;
+  for (size_t id = 0; id < only_ts.size(); id++) {
+    if (!std::isfinite(only_ts[id])) {
+      finite = false;
+      peak_id = id;
+    } else if (finite && std::abs(only_ts[id]) > peak) {
+      peak = std::abs(only_ts[id]);
+      peak_id = id;
+    }
+  }
+  if (!torque_tripped_ && (!finite || peak > kMaxTorque)) {
+    torque_tripped_ = true;
+    RCLCPP_FATAL(rclcpp::get_logger("hardware_bridge"),
+                 "TORQUE GUARD: joint %zu (%s) %.1f Nm%s, limit %.0f Nm. All motors at 0 from now "
+                 "on: restart the framework.",
+                 peak_id, mJoints[peak_id].name.c_str(), only_ts[peak_id],
+                 finite ? "" : " (not finite)", kMaxTorque);
+  }
+  if (torque_tripped_) {  // latched: zero torque on every motor, in both control modes
+    std::fill(only_ts.begin(), only_ts.end(), 0.0);
+    std::fill(t.begin(), t.end(), 0.0);
+    std::fill(kp.begin(), kp.end(), 0.0);
+    std::fill(kd.begin(), kd.end(), 0.0);
+    std::fill(v.begin(), v.end(), 0.0);
   }
   if (pvt_ctrl_) {
     if (!robot_->set_target_joint_mit(p, v, kp, kd, t)) {

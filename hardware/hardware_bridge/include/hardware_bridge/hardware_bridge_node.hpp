@@ -88,6 +88,9 @@ private:
   std::unique_ptr<tita_robot> robot_;
   rclcpp::Clock clock_{RCL_SYSTEM_TIME};
   bool pvt_ctrl_{true};
+ 
+  static constexpr double kMaxTorque = 90.0;  // Nm
+  bool torque_tripped_{false};
 };
 }  // namespace tita_locomotion
 

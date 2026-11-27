@@ -133,6 +133,7 @@ std::string FSMState_RL::checkTransition()
 {
   this->_nextStateName = this->_stateName;
   auto desiredState = _data->rc_data->fsm_name_;
+  if (desiredState == "idle") return "idle";  // radio JUMP (safety): immediate
   // 将 switch 替换为 if-else 结构
   if (desiredState.find("rl_") == 0) {
     try {
