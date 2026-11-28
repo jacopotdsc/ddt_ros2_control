@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #include "teleop_command/teleop_command_node.hpp"
+
+#include <algorithm>
 namespace teleop_command
 {
 TeleopCmdNode::TeleopCmdNode(const rclcpp::NodeOptions & options) : Node("teleop_command", options)
@@ -150,14 +152,11 @@ void TeleopCmdNode::fsm_goal_cb()
       armed_ = false;
     }
 
-    // Armed only from no safety (JUMP released, right stick centred), SPEED low, HEIGHT low and
+    // Armed only from no safety (JUMP released), both sticks centred, SPEED low, HEIGHT low and
     // CROUCH: it never stands up at once.
-    if (!armed_ && !safety &&
-        joy_msg_->axes[SPEED_REGULATION] == SPEED_LOW &&
-        joy_msg_->axes[ADJUST_HEIGHT] == HEIGHT_LOW &&
-        joy_msg_->axes[STAND_AND_CROUCH] == CROUCH) {
+    if (!armed_ && arming_blockers(joy_msg_->axes).empty()) {
       armed_ = true;
-      RCLCPP_WARN(this->get_logger(), "FSM: armed (SPEED low, HEIGHT low, CROUCH)");
+      RCLCPP_WARN(this->get_logger(), "FSM: armed (JUMP released, sticks centred, SPEED low, HEIGHT low, CROUCH)");
     }
 
     std::string state;  // current rl_controller FSM state ("" until the first fsm_state)
@@ -167,23 +166,31 @@ void TeleopCmdNode::fsm_goal_cb()
     }
     const bool folded = state.empty() || state == "idle" || state == "transform_down";
 
-    // Folded: STAND only with SPEED low and HEIGHT low, otherwise disarmed and the arming hint
-    // below is printed.
-    if (armed_ && folded && joy_key_msg_.data != "transform_up" &&
-        joy_msg_->axes[STAND_AND_CROUCH] == STAND &&
-        (joy_msg_->axes[SPEED_REGULATION] != SPEED_LOW ||
-         joy_msg_->axes[ADJUST_HEIGHT] != HEIGHT_LOW)) {
-      armed_ = false;
-      RCLCPP_WARN(this->get_logger(), "FSM: STAND with SPEED or HEIGHT not low while folded, disarmed");
+    // Folded: every stick / switch must stay in the arming position (sticks centred, SPEED low,
+    // HEIGHT low), except CH5 (STAND stands up), otherwise disarmed at once (not only at STAND)
+    // and the arming hint below is printed. Standing, the sticks drive.
+    if (armed_ && folded && joy_key_msg_.data != "transform_up") {
+      auto blockers = arming_blockers(joy_msg_->axes);
+      blockers.erase(std::remove(blockers.begin(), blockers.end(), STAND_AND_CROUCH), blockers.end());
+      if (!blockers.empty()) {
+        armed_ = false;
+        RCLCPP_WARN(this->get_logger(),
+                    "FSM: stick or switch out of the arming position while folded, disarmed");
+      }
     }
 
     if (!armed_) {
-      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "FSM: not armed. Check JUMP released, right stick centred, SPEED low, HEIGHT low, and CROUCH");
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "FSM: not armed. Check JUMP released, both sticks centred, SPEED low, HEIGHT low, and CROUCH");
       if (joy_msg_->axes[STAND_AND_CROUCH] == STAND) {  // trying to stand up while not armed
         std::string wrong;
         if (joy_msg_->axes[JUMP] == JUMP_PULLED) wrong += " JUMP pulled (release it);";
-        if (std::abs(joy_msg_->axes[ROLL]) > 0.5 || std::abs(joy_msg_->axes[PITCH]) > 0.5) {
+        if (std::abs(joy_msg_->axes[ROLL]) > kStickCentred ||
+            std::abs(joy_msg_->axes[PITCH]) > kStickCentred) {
           wrong += " right stick moved (centre it);";
+        }
+        if (std::abs(joy_msg_->axes[FORWARD]) > kStickCentred ||
+            std::abs(joy_msg_->axes[YAW]) > kStickCentred) {
+          wrong += " left stick moved (centre it);";
         }
         if (joy_msg_->axes[SPEED_REGULATION] != SPEED_LOW) wrong += " SPEED not low (put it low);";
         if (joy_msg_->axes[ADJUST_HEIGHT] != HEIGHT_LOW) wrong += " HEIGHT not low (put it low);";

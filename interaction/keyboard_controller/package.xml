@@ -16,6 +16,13 @@
 
   <depend>ros_utils</depend>
   <depend>tf2</depend>  
+  <!-- radio_keyboard: runs the teleop_command node on a simulated radio -->
+  <depend>teleop_command</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>gazebo_msgs</depend>
+  <depend>urdf</depend>
+  <depend>eigen</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>

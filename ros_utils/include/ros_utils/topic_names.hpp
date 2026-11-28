@@ -32,11 +32,14 @@ inline const std::string body_imu = "imu_sensor_broadcaster/imu";
 inline const std::string joint_states = "joint_states";
 inline const std::string robot_description = "robot_description";
 inline const std::string filtered_state = "filtered_state";  // tita_state_estimator
+inline const std::string gazebo_model_states = "/model_states";  // gazebo_msgs/ModelStates (global, Gazebo)
 
 // mpx
 inline const std::string mpx_joint_command = "mpx/joint_command";  // WBC: tau_ff, q_des, qd_des
 inline const std::string mpx_handoff = "mpx/handoff";
 inline const std::string mpx_keys_locked = "mpx/keys_locked";
+// MPX believed COM (PointStamped, world): outputs.estimate_topic_prefix + "/com" (mpx.yaml)
+inline const std::string mpx_estimate_com = "mpx/estimate/com";
 
 // residual network
 inline const std::string residual_joint_command = "residual/joint_command";

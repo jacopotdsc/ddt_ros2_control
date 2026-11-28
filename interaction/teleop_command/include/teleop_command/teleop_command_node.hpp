@@ -15,7 +15,9 @@
 #ifndef TELEOP_COMMAND__TELEOP_COMMAND_NODE_HPP_
 #define TELEOP_COMMAND__TELEOP_COMMAND_NODE_HPP_
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -104,6 +106,24 @@ public:
   explicit TeleopCmdNode(const rclcpp::NodeOptions & options);
   void init();
 
+  // Sticks / switches not in the arming position (JUMP released, both sticks centred, SPEED low,
+  // HEIGHT low, CROUCH), from joy.axes: empty = the radio can arm. Used by fsm_goal_cb and by the
+  // simulated radio (keyboard_controller radio_keyboard).
+  static constexpr float kStickCentred = 0.1f;  // |axis| for a centred stick (arming only)
+  static std::vector<int> arming_blockers(const std::vector<float> & axes)
+  {
+    std::vector<int> blockers;
+    if (axes[JUMP] == JUMP_PULLED) blockers.push_back(JUMP);
+    for (int stick : {ROLL, PITCH, FORWARD, YAW}) {
+      if (std::abs(axes[stick]) > kStickCentred) blockers.push_back(stick);
+    }
+    if (axes[SPEED_REGULATION] != SPEED_LOW) blockers.push_back(SPEED_REGULATION);
+    if (axes[ADJUST_HEIGHT] != HEIGHT_LOW) blockers.push_back(ADJUST_HEIGHT);
+    if (axes[STAND_AND_CROUCH] != CROUCH) blockers.push_back(STAND_AND_CROUCH);
+    return blockers;
+  }
+  bool armed() const { return armed_; }
+
 private:
   void cmd_vel_cb();
   void posestamped_cb();
@@ -135,7 +155,7 @@ private:
   TransferDataT crsf_transfer_data_;
   int last_key;
   
-  bool armed_ = false;  // fsm_goal_cb: false at start and after JUMP (safety)
+  std::atomic<bool> armed_{false};  // fsm_goal_cb: false at start and after JUMP (safety)
 
   // Current rl_controller FSM state (fsm_state topic): fsm_goal_cb requests transform_up while
   // folded and mpc before residual. Written by the ROS executor, read by the radio thread.
