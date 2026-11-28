@@ -57,9 +57,7 @@ void TeleopCmdNode::init()
   realtime_joy_publisher_->msg_.buttons.resize(params_.joystick_buttons_size, 0);
   joy_msg_ = std::make_shared<sensor_msgs::msg::Joy>();
   *joy_msg_ = realtime_joy_publisher_->msg_;
-  timer_ = rclcpp::create_timer(
-    this, this->get_clock(), std::chrono::milliseconds(1000 / params_.update_rate),
-    std::bind(&TeleopCmdNode::fsm_goal_cb, this));
+  // fsm_goal_cb runs at every radio packet (crsf_dataread_cb), not on a timer.
 
   // others
   this->crsf_transfer_data_.quadruped_mode = 0;
@@ -138,21 +136,76 @@ void TeleopCmdNode::fsm_goal_cb()
     // RCLCPP_WARN_THROTTLE(
     //   this->get_logger(), *this->get_clock(), 5000, "fsm goal in called");
     auto & msg = realtime_fsm_goal_publisher_->msg_;
-    if (joy_msg_->axes[4] == 1) {
-      msg.data = "transform_down";
-    } else if (joy_msg_->axes[4] == -1) {
-      msg.data = "transform_up";
+    std::string key;  // switch that set msg.data, printed with the change below
+    // Safety: JUMP pulled OR right stick moved (more than half way on ROLL or PITCH).
+    const bool safety = joy_msg_->axes[JUMP] == JUMP_PULLED ||
+                        std::abs(joy_msg_->axes[ROLL]) > 0.5 ||
+                        std::abs(joy_msg_->axes[PITCH]) > 0.5;
+    if (safety) {  // always, armed or not -> idle, disarmed
+      if (armed_) RCLCPP_WARN(this->get_logger(), "FSM: safety (JUMP or right stick), disarmed");
+      msg.data = "idle";
+      key = joy_msg_->axes[JUMP] == JUMP_PULLED ? "JUMP pulled" : "right stick";
+      armed_ = false;
     }
 
-    if (joy_msg_->axes[4] == -1) {
-      if (joy_msg_->axes[5] == 0 || joy_msg_->axes[5] == -1) {
-        msg.data = "rl_flat";
-        if (joy_msg_->axes[6] == -1) {
-          msg.data = "jump";
+    // Armed only from no safety (JUMP released, right stick centred), SPEED low, HEIGHT low and
+    // CROUCH: it never stands up at once.
+    if (!armed_ && !safety &&
+        joy_msg_->axes[SPEED_REGULATION] == SPEED_LOW &&
+        joy_msg_->axes[ADJUST_HEIGHT] == HEIGHT_LOW &&
+        joy_msg_->axes[STAND_AND_CROUCH] == CROUCH) {
+      armed_ = true;
+      RCLCPP_WARN(this->get_logger(), "FSM: armed (SPEED low, HEIGHT low, CROUCH)");
+    }
+
+    // Folded (no transform_up / rl_flat requested yet): STAND only with SPEED low and HEIGHT low,
+    // otherwise disarmed and the arming hint below is printed.
+    if (armed_ && joy_msg_->axes[STAND_AND_CROUCH] == STAND &&
+        (joy_msg_->axes[SPEED_REGULATION] != SPEED_LOW ||
+         joy_msg_->axes[ADJUST_HEIGHT] != HEIGHT_LOW) &&
+        joy_key_msg_.data != "transform_up" && joy_key_msg_.data != "rl_flat") {
+      armed_ = false;
+      RCLCPP_WARN(this->get_logger(), "FSM: STAND with SPEED or HEIGHT not low while folded, disarmed");
+    }
+
+    if (!armed_) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "FSM: not armed. Check JUMP released, right stick centred, SPEED low, HEIGHT low, and CROUCH");
+      if (joy_msg_->axes[STAND_AND_CROUCH] == STAND) {  // trying to stand up while not armed
+        std::string wrong;
+        if (joy_msg_->axes[JUMP] == JUMP_PULLED) wrong += " JUMP pulled (release it);";
+        if (std::abs(joy_msg_->axes[ROLL]) > 0.5 || std::abs(joy_msg_->axes[PITCH]) > 0.5) {
+          wrong += " right stick moved (centre it);";
+        }
+        if (joy_msg_->axes[SPEED_REGULATION] != SPEED_LOW) wrong += " SPEED not low (put it low);";
+        if (joy_msg_->axes[ADJUST_HEIGHT] != HEIGHT_LOW) wrong += " HEIGHT not low (put it low);";
+        wrong += " STAND (put CROUCH, then STAND again)";
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                             "FSM: STAND ignored, not armed. Put the switches in the arming "
+                             "position:%s",
+                             wrong.c_str());
+      }
+    }
+    else {
+      if (joy_msg_->axes[STAND_AND_CROUCH] == CROUCH) {
+        msg.data = "transform_down";
+        key = "CROUCH";
+      } else if (joy_msg_->axes[STAND_AND_CROUCH] == STAND) {
+        msg.data = "transform_up";
+        key = "STAND, SPEED low";
+      }
+
+      if (joy_msg_->axes[STAND_AND_CROUCH] == STAND) {
+        if (joy_msg_->axes[SPEED_REGULATION] == SPEED_MEDIUM) {
+          msg.data = "rl_flat";
+          key = "STAND, SPEED medium";
+        } else if (joy_msg_->axes[SPEED_REGULATION] == SPEED_HIGH) {
+          msg.data = "rl_flat";
+          key = "STAND, SPEED high";
         }
       }
     }
     if (joy_key_msg_.data != msg.data) {
+      RCLCPP_WARN(this->get_logger(), "FSM: %s -> %s (%s)", joy_key_msg_.data.c_str(), msg.data.c_str(), key.c_str());
       joy_key_msg_.data = msg.data;
       realtime_fsm_goal_publisher_->unlockAndPublish();  // only publish when data changed
     } else {
@@ -208,6 +261,7 @@ void TeleopCmdNode::crsf_dataread_cb(const uint16_t channels[])
       msg.buttons[0] = static_cast<int>(channels[8] - 988) / 4;  // debug, not use
       *joy_msg_ = msg;
       realtime_joy_publisher_->unlockAndPublish();
+      fsm_goal_cb();
       cmd_vel_cb();
       posestamped_cb();
     }
