@@ -217,7 +217,7 @@ struct StateLayout {
 // mpx/trajectory (std_msgs/Float64MultiArray), MPC node -> WBC node:
 //   data[0..1]  stamp of the feedback the MPC solved from (sec, nanosec; robot clock)
 //   data[2]     activation generation (changes on every activation / reset)
-//   data[3]     COM height reference (ramped) for the WBC
+//   data[3]     COM height reference (ramped), sent to the MPC; not used by the WBC
 //   data[4]     1 = active, 0 = standby (the WBC stops publishing at once)
 //   data[5]     weight phase: index in config_tita.weight_phases (W_mpc / W_wbc entry)
 //   data[6..]   U, horizon x nu row-major; WBC currently holds the first row U[0]

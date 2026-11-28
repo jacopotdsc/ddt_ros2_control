@@ -108,7 +108,7 @@ int benchmark_worker(py::object solver, double seconds, double mpc_hz, double wb
       solver.attr(mpc_worker ? "prepare" : "prepare_wbc")(
           mpx::readonly_buffer(qpos), mpx::readonly_buffer(qvel), false);
       auto out = mpc_worker ? mpx::array_values(solver.attr("plan")(command))
-                            : mpx::array_values(solver.attr("wbc")(mpx::readonly_buffer(u), 0.4));
+                            : mpx::array_values(solver.attr("wbc")(mpx::readonly_buffer(u)));
       if (!std::all_of(out.begin(), out.end(), [](double v) { return std::isfinite(v); })) {
         ++stats.invalid;
       } else if (mpc_worker) {

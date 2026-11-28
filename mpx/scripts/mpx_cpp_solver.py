@@ -135,11 +135,11 @@ class Solver:
     # MPC and WBC stay the MPX JAX functions; only their scheduling is split.
 
     def plan_controller(self, mpc_state, theta_prev, raw, command, W):
-        """MPC only: same computation as BatchedMPCControllerWrapper.run, also returning U.
+        """MPC only: same computation as BatchedMPCControllerWrapper.run, also returning the plan.
 
-        run() keeps only U[:, 0] (state.sol) and the shifted warm start. Publish the
-        whole plan in the trajectory message; the WBC currently consumes its first input,
-        matching mjx_tita.py, while recomputing on each fresh measured state.
+        run() keeps only U[:, 0] (state.sol) and the shifted warm start. The whole input plan U goes
+        in the trajectory message; the WBC uses its first input U[0] and takes its references from
+        its own measured state (wbc_controller).
         """
         mpc = self.mpc
         _, x0, theta_prev = mpc.process_state(*raw, theta_prev)
@@ -156,14 +156,16 @@ class Solver:
             integral=mpc_state.integral,
         )
         ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(U))
-        return new_state, theta_prev, U[0], ok
+        return new_state, theta_prev, U[0], ok  # U[0]: the plan of the one batch entry (N, nu)
 
     def phase_index(self, name):
         """Index of a weight phase in config.weight_phases (what the C++ nodes exchange)."""
         return self.phases.index(name)
 
-    def wbc_controller(self, template, theta_prev, raw, qpos, qvel, u, height, ww, wp, phase_id):
-        """WBC on measured state, using the held first input from the latest MPC plan.
+    def wbc_controller(self, template, theta_prev, raw, qpos, qvel, u, ww, wp, phase_id):
+        """WBC on the current measured state: references = that state integrated over
+        wbc_lookahead_dt with u = the first input U[0] of the latest MPC plan, held until the next
+        plan (as mjx_tita.py; _build_desired_impl).
         template: the live WBC state (its integral memory is updated and returned)."""
         tita_state, x0, theta_prev = self.mpc.process_state(*raw, theta_prev)
         state = template.replace(sol=ControlSol(
@@ -172,7 +174,6 @@ class Solver:
             state, x0, qpos, qvel,
             tita_state[6:9][None, :], tita_state[9:12][None, :],
             tita_state[12:15][None, :], tita_state[15:18][None, :],
-            com_height_target=height,
             ww=ww, wp=wp, phase_id=phase_id,
         )
         flags = jnp.array([
@@ -213,7 +214,7 @@ class Solver:
         for _ in range(3):
             tau, qddot, _, flags, _ = self._wbc_call(0)(
                 self._wbc_template, np.asarray(0., dtype=np.float64), raw,
-                data.qpos.copy()[None, :], data.qvel.copy()[None, :], u, command[:, 3])
+                data.qpos.copy()[None, :], data.qvel.copy()[None, :], u)
             jax.block_until_ready(tau)
             if not np.all(np.asarray(flags)) or not np.all(np.isfinite(tau)):
                 raise RuntimeError('MPX WBC warm-up produced invalid control')
@@ -238,7 +239,8 @@ class Solver:
                        phase_id=jnp.asarray(float(phase)))
 
     def plan(self, command, phase=0):
-        """One MPC solve on the state of the last prepare(); returns U flattened (N*nu).
+        """One MPC solve on the state of the last prepare(); returns the input plan U flattened
+        (N*nu, row-major).
 
         phase: index of the weight phase in config.weight_phases (W_mpc entry), 0 = "W".
         """
@@ -267,9 +269,10 @@ class Solver:
             self.theta_wbc = np.asarray(0., dtype=np.float64)
             self._wbc_template = self.mpc.init_state()  # integral memory back to zero
 
-    def wbc(self, u, height, phase=0):
+    def wbc(self, u, phase=0):
         """WBC on the state of the last prepare_wbc(); returns [tau (8), qddot (nv)].
 
+        u: first input U[0] of the latest MPC plan (nu values).
         phase: index of the weight phase in config.weight_phases (W_wbc entry), 0 = "W".
         """
         u = np.asarray(u, dtype=np.float64)
@@ -279,8 +282,7 @@ class Solver:
         # (mpx_tita, mpc_utils.wbc_integral_update); the memory is kept only on a valid result.
         tau, qddot, theta, flags, state = self._wbc_call(phase)(
             self._wbc_template, self.theta_wbc, self.raw_wbc,
-            self.data_wbc.qpos.copy()[None, :], self.data_wbc.qvel.copy()[None, :], u,
-            np.asarray([height], dtype=np.float64))
+            self.data_wbc.qpos.copy()[None, :], self.data_wbc.qvel.copy()[None, :], u)
         out = np.concatenate((np.asarray(tau), np.asarray(qddot)))
         if out.shape != (8 + self.nv,) or not np.all(np.isfinite(out)) or not np.all(np.asarray(flags)):
             raise ValueError('Invalid WBC result; holding the last valid command')

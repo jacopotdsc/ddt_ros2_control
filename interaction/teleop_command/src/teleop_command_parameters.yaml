@@ -42,6 +42,12 @@ teleop_command:
     description: "Max angular velocity of command input, rad/s",
     validation: { bounds<>: [0.0, 10.0] },
   }
+  height_targets: {
+    type: double_array,
+    default_value: [0.28, 0.33, 0.35],
+    description: "cmd_pose.z (COM height, m) for ADJUST_HEIGHT (CH6) low / medium / high (used by mpc)",
+    validation: { fixed_size<>: [3] },
+  }
   max_roll: {
     type: double,
     default_value: 0.2,

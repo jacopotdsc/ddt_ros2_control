@@ -100,7 +100,7 @@ def main():
         prepare_wbc_ms.append((time.perf_counter() - start) * 1000.)
         start = time.perf_counter()
         try:
-            command_out = solver.wbc(latest_u, cfg.com_z_to_track)
+            command_out = solver.wbc(latest_u)
         except ValueError:
             invalid += 1
             raise

@@ -170,7 +170,6 @@ private:
         Joints joints;
         Clock::time_point received;
         int64_t stamp, plan_stamp, plan_generation;
-        double height;
         int phase;
         bool reset = false;
         {
@@ -196,7 +195,6 @@ private:
           // Match mjx_tita.py: use the first MPC input and hold it until a new
           // plan arrives. The WBC still recomputes on this cycle's measured state.
           std::copy_n(trajectory_.U.begin(), nu_, u.begin());
-          height = trajectory_.height;
           phase = trajectory_.phase;
           if (plan_generation != generation) {
             generation = plan_generation;
@@ -220,7 +218,7 @@ private:
           solver_.attr("prepare_wbc")(mpx::readonly_buffer(qpos),
                                       mpx::readonly_buffer(qvel), reset);
           auto out =
-              mpx::array_values(solver_.attr("wbc")(mpx::readonly_buffer(u), height, phase));
+              mpx::array_values(solver_.attr("wbc")(mpx::readonly_buffer(u), phase));
           if (out.size() != nj + layout.nv)
             throw std::runtime_error("Invalid WBC output size");
           // Joint targets one WBC period ahead, for the low-level PD.

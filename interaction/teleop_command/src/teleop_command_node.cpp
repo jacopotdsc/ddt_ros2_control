@@ -58,6 +58,12 @@ void TeleopCmdNode::init()
   joy_msg_ = std::make_shared<sensor_msgs::msg::Joy>();
   *joy_msg_ = realtime_joy_publisher_->msg_;
   // fsm_goal_cb runs at every radio packet (crsf_dataread_cb), not on a timer.
+  fsm_state_subscription_ = this->create_subscription<std_msgs::msg::String>(
+    ros_topic::fsm_state, rclcpp::QoS(1).reliable().transient_local(),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(fsm_state_mutex_);
+      fsm_state_ = msg->data;
+    });
 
   // others
   this->crsf_transfer_data_.quadruped_mode = 0;
@@ -75,13 +81,10 @@ void TeleopCmdNode::cmd_vel_cb()
     auto speed_ratio = params_.speed_ratio[index];
     msg.linear.x = -joy_msg_->axes[2] * params_.max_twist_linear * speed_ratio;
     msg.angular.z = joy_msg_->axes[3] * params_.max_twist_angular * speed_ratio;
-    if (joy_msg_->axes[5] == 0) {
-      msg.linear.y = joy_msg_->axes[0] * 1.0 * speed_ratio;
-      msg.linear.z = -joy_msg_->axes[1] * 1.0 * speed_ratio;
-    } else {
-      msg.linear.y = 0.0;
-      msg.linear.z = 0.0;
-    }
+    // Right stick (ROLL, PITCH) is the safety (fsm_goal_cb) and ADJUST_HEIGHT selects the height:
+    // no vy / vz from the radio.
+    msg.linear.y = 0.0;
+    msg.linear.z = 0.0;
 
     realtime_cmd_vel_publisher_->unlockAndPublish();
   }
@@ -108,11 +111,10 @@ void TeleopCmdNode::posestamped_cb()
     //       params_.position_ratio;  //-joy_msg_->axes[1] * params_.position_ratio;
     // z_ = clamp<double>(z_, params_.position_z_limits[0], params_.position_z_limits[1]);
     // } else
-    double roll{0}, pitch{0}, yaw{0}, x{0}, y{0}, z{0.1};
-    if (joy_msg_->axes[5] == -1) {
-      roll = -joy_msg_->axes[0] * params_.max_roll;
-      pitch = -joy_msg_->axes[1] * params_.max_pitch;
-    }
+    // Height from ADJUST_HEIGHT (CH6): low / medium / high = height_targets[0 / 1 / 2].
+    int height_index = static_cast<int>(std::clamp(1 - joy_msg_->axes[ADJUST_HEIGHT], 0.0f, 2.0f));
+    // No roll / pitch from the right stick: it is the safety (fsm_goal_cb).
+    double roll{0}, pitch{0}, yaw{0}, x{0}, y{0}, z{params_.height_targets[height_index]};
     // } else {      // 右switch高位
     //   yaw_ = joy_msg_->axes[0] * params_.orientation_ratio;
     // }
@@ -158,12 +160,19 @@ void TeleopCmdNode::fsm_goal_cb()
       RCLCPP_WARN(this->get_logger(), "FSM: armed (SPEED low, HEIGHT low, CROUCH)");
     }
 
-    // Folded (no transform_up / rl_flat requested yet): STAND only with SPEED low and HEIGHT low,
-    // otherwise disarmed and the arming hint below is printed.
-    if (armed_ && joy_msg_->axes[STAND_AND_CROUCH] == STAND &&
+    std::string state;  // current rl_controller FSM state ("" until the first fsm_state)
+    {
+      std::lock_guard<std::mutex> lock(fsm_state_mutex_);
+      state = fsm_state_;
+    }
+    const bool folded = state.empty() || state == "idle" || state == "transform_down";
+
+    // Folded: STAND only with SPEED low and HEIGHT low, otherwise disarmed and the arming hint
+    // below is printed.
+    if (armed_ && folded && joy_key_msg_.data != "transform_up" &&
+        joy_msg_->axes[STAND_AND_CROUCH] == STAND &&
         (joy_msg_->axes[SPEED_REGULATION] != SPEED_LOW ||
-         joy_msg_->axes[ADJUST_HEIGHT] != HEIGHT_LOW) &&
-        joy_key_msg_.data != "transform_up" && joy_key_msg_.data != "rl_flat") {
+         joy_msg_->axes[ADJUST_HEIGHT] != HEIGHT_LOW)) {
       armed_ = false;
       RCLCPP_WARN(this->get_logger(), "FSM: STAND with SPEED or HEIGHT not low while folded, disarmed");
     }
@@ -190,17 +199,23 @@ void TeleopCmdNode::fsm_goal_cb()
         msg.data = "transform_down";
         key = "CROUCH";
       } else if (joy_msg_->axes[STAND_AND_CROUCH] == STAND) {
-        msg.data = "transform_up";
+        // Controller chosen by SPEED: low none (stand up, no controller request), medium and high
+        // mpc (high will select residual once its network exists).
+        std::string target;
         key = "STAND, SPEED low";
-      }
-
-      if (joy_msg_->axes[STAND_AND_CROUCH] == STAND) {
         if (joy_msg_->axes[SPEED_REGULATION] == SPEED_MEDIUM) {
-          msg.data = "rl_flat";
+          target = "mpc";
           key = "STAND, SPEED medium";
         } else if (joy_msg_->axes[SPEED_REGULATION] == SPEED_HIGH) {
-          msg.data = "rl_flat";
+          target = "mpc";
           key = "STAND, SPEED high";
+        }
+        if (folded) {
+          msg.data = "transform_up";  // stand up first: idle accepts only transform_up
+        } else if (target.empty()) {
+          msg.data = joy_key_msg_.data;  // SPEED low: nothing new requested
+        } else {
+          msg.data = target;
         }
       }
     }

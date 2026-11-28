@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -64,14 +65,14 @@ typedef enum {
 // (bag 2026-11-27, md_files/teleop_command_map.md).
 // joy axis INDEX of each stick and switch (index = channel - 1): where to read in joy.axes.
 typedef enum {
-  ROLL = 0,              // CH1, right stick horizontal: roll (cmd_pose) or vy (cmd_twist)
-  PITCH = 1,             // CH2, right stick vertical: pitch (cmd_pose) or vz (cmd_twist)
+  ROLL = 0,              // CH1, right stick horizontal: safety (idle) past half way
+  PITCH = 1,             // CH2, right stick vertical: safety (idle) past half way
   FORWARD = 2,           // CH3, left stick vertical: vx (cmd_twist)
   YAW = 3,               // CH4, left stick horizontal: wz (cmd_twist)
   STAND_AND_CROUCH = 4,  // CH5: transform_up / transform_down
-  ADJUST_HEIGHT = 5,     // CH6: selects vy/vz or roll/pitch for the right stick
+  ADJUST_HEIGHT = 5,     // CH6: cmd_pose.z = height_targets[low / medium / high]
   JUMP = 6,              // CH7: safety (idle)
-  SPEED_REGULATION = 7,  // CH8: arm + controller selector (low stand still, medium rl, high mpc)
+  SPEED_REGULATION = 7,  // CH8: arm + controller selector (low none, medium / high mpc)
 } joy_axis_t;
 
 // VALUE read at that index for each switch position (channel 172 -> +1, 992 -> 0, 1811 -> -1).
@@ -86,13 +87,13 @@ typedef enum {         // joy.axes[JUMP]
 } jump_t;
 
 typedef enum {        // joy.axes[SPEED_REGULATION]
-  SPEED_LOW = 1,      // arm / stand still
-  SPEED_MEDIUM = 0,   // rl
-  SPEED_HIGH = -1,    // mpc
+  SPEED_LOW = 1,      // arm / stand up, no controller request
+  SPEED_MEDIUM = 0,   // mpc
+  SPEED_HIGH = -1,    // mpc (residual once its network exists)
 } speed_regulation_t;
 
 typedef enum {         // joy.axes[ADJUST_HEIGHT]
-  HEIGHT_LOW = 1,      // arm
+  HEIGHT_LOW = 1,      // arm; cmd_pose.z = height_targets[0]
   HEIGHT_MEDIUM = 0,
   HEIGHT_HIGH = -1,
 } adjust_height_t;
@@ -135,6 +136,12 @@ private:
   int last_key;
   
   bool armed_ = false;  // fsm_goal_cb: false at start and after JUMP (safety)
+
+  // Current rl_controller FSM state (fsm_state topic): fsm_goal_cb requests transform_up while
+  // folded and mpc before residual. Written by the ROS executor, read by the radio thread.
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr fsm_state_subscription_;
+  std::mutex fsm_state_mutex_;
+  std::string fsm_state_;
 };
 }  // namespace teleop_command
 #endif  // TELEOP_COMMAND__TELEOP_COMMAND_NODE_HPP_
